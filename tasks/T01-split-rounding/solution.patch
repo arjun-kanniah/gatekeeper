@@ -1,0 +1,16 @@
+diff --git a/src/split.ts b/src/split.ts
+index 5963a23..99eb116 100644
+--- a/src/split.ts
++++ b/src/split.ts
+@@ -6,6 +6,9 @@
+  */
+ export function splitEqually(amountCents: number, memberIds: string[]): Map<string, number> {
+   if (memberIds.length === 0) throw new Error("Cannot split among zero members");
+-  const each = Math.round(amountCents / memberIds.length);
+-  return new Map(memberIds.map((id) => [id, each]));
++  // Integer division, then hand the leftover cents to the earliest members, one each.
++  const n = memberIds.length;
++  const base = Math.floor(amountCents / n);
++  const remainder = amountCents - base * n;
++  return new Map(memberIds.map((id, i) => [id, base + (i < remainder ? 1 : 0)]));
+ }

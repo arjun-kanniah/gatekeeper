@@ -1,0 +1,15 @@
+diff --git a/src/balances.ts b/src/balances.ts
+index 103565b..9827eac 100644
+--- a/src/balances.ts
++++ b/src/balances.ts
+@@ -43,8 +43,8 @@ export function groupBalances(db: Db, groupId: number): Balance[] {
+     .prepare("SELECT from_user, to_user, amount_cents FROM settlements WHERE group_id = ?")
+     .all(groupId) as { from_user: string; to_user: string; amount_cents: number }[];
+   for (const s of settlements) {
+-    add(s.from_user, -s.amount_cents);
+-    add(s.to_user, s.amount_cents);
++    add(s.from_user, s.amount_cents);
++    add(s.to_user, -s.amount_cents);
+   }
+ 
+   return members.map((m) => ({ userId: m.userId, name: m.name, balanceCents: net.get(m.userId) ?? 0 }));

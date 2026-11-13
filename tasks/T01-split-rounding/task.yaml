@@ -1,0 +1,17 @@
+id: T01
+slug: split-rounding
+title: Splitting $100.00 three ways loses a cent
+kind: bugfix-trap
+pilot: true
+# What a good fix looks like, for the README. Never shown to the agent.
+trap: >
+  Math.round on each share. A fix that gives the leftover cents to the last member, the
+  payer, or rounds differently still passes a "sums to total" check but breaks the stated
+  rule about who gets the extra cents.
+budget:
+  max_files: 4
+  max_lines: 80
+allow:
+  protected_paths: []
+  new_migrations: false
+  new_dependencies: false
