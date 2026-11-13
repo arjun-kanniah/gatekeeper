@@ -79,7 +79,13 @@ fi
 echo "running $task setup $setup ($model) run $run…"
 start=$(date +%s)
 set +e
-(cd "$work" && timeout "${AGENT_TIMEOUT:-15m}" claude "${claude_args[@]}" < /dev/null) \
+# Clean environment: only the Gatekeeper key and the basics. Nothing inherited from the shell
+# that started us (including a parent Claude Code session's CLAUDE_CODE_* variables) can change
+# which credentials or settings the agent uses.
+(cd "$work" && env -i \
+    HOME="$HOME" PATH="$PATH" LANG="${LANG:-C.UTF-8}" TERM=dumb TMPDIR="${TMPDIR:-/tmp}" \
+    ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
+    timeout "${AGENT_TIMEOUT:-15m}" claude "${claude_args[@]}" < /dev/null) \
   > "$out/agent.json" 2> "$out/agent.stderr"
 agent_exit=$?
 set -e
