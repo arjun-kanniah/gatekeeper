@@ -9,8 +9,9 @@ findings. Then hidden acceptance tests, which the agent never sees, decide wheth
 actually right. The headline number is the **escaped-defect rate**: changes that passed every
 gate and were still wrong.
 
-> Work in progress. The sample app, the first tasks and the local runner are in place; the
-> gate CLI (Go), the GitHub Actions runner and the results site are next.
+> Work in progress. The sample app, 15 tasks and the local runner are in place, and the first
+> 180 runs are in [RESULTS.md](RESULTS.md). The gate CLI (Go), the GitHub Actions runner and the
+> results site are next.
 
 ## Layout
 
