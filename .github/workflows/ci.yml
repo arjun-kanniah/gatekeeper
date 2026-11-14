@@ -1,0 +1,56 @@
+# Everything that costs nothing: the gate CLI's tests, task validation (hidden tests fail on the
+# base code and pass with the reference fix; Semgrep rules pass their tests and are clean on the
+# base app), and the scripted traps replayed through the gates. No API key, no agent.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      # Go, Node and Semgrep at the versions pinned in mise.toml.
+      - uses: jdx/mise-action@v5.2.5
+
+      - name: Gate CLI
+        run: |
+          go vet ./...
+          go test ./...
+
+      - name: Install Tally
+        working-directory: tally
+        run: npm ci --no-audit --no-fund
+
+      - name: Validate tasks and rules
+        run: runner/validate-tasks.sh
+
+      - name: Replay the scripted traps through the gates
+        run: BATCH=traps-ci runner/run-traps.sh | tee traps.log
+
+      - name: Summary
+        if: always()
+        run: |
+          if [[ -f traps.log ]]; then
+            { echo '## Scripted traps'; echo '```'; sed -n '/^Each trap/,$p' traps.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: actions/upload-artifact@v7.0.2
+        if: always()
+        with:
+          name: traps
+          path: runs/traps-ci/
+          if-no-files-found: ignore
+          retention-days: 14

@@ -76,7 +76,8 @@ if [[ $with_claude_md == 1 ]]; then
   claude_args+=(--append-system-prompt-file "$work/CLAUDE.md")
 fi
 
-echo "running $task setup $setup ($model) run $run…"
+claude_version="$(claude --version 2>/dev/null | head -1 | cut -d' ' -f1)"
+echo "running $task setup $setup ($model, Claude Code $claude_version) run $run…"
 start=$(date +%s)
 set +e
 # Clean environment: only the Gatekeeper key and the basics. Nothing inherited from the shell
@@ -107,7 +108,7 @@ let gates = null;
 try { gates = JSON.parse(fs.readFileSync(out + "/gates.json", "utf8")); } catch {}
 const gatesExit = $gates_exit;
 const meta = {
-  task: "$task", setup: "$setup", run: $run, model: "$model",
+  task: "$task", setup: "$setup", run: $run, model: "$model", claudeVersion: "$claude_version",
   claudeMd: $with_claude_md === 1, budgetUsd: $budget,
   agentExit: $agent_exit, elapsedSec: $elapsed,
   costUsd: agent.total_cost_usd ?? null, turns: agent.num_turns ?? null,

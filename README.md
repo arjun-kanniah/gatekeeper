@@ -9,9 +9,9 @@ findings. Then hidden acceptance tests, which the agent never sees, decide wheth
 actually right. The headline number is the **escaped-defect rate**: changes that passed every
 gate and were still wrong.
 
-> Work in progress. The sample app, 15 tasks, the local runner and the gate CLI are in place,
-> and the first 180 runs are in [RESULTS.md](RESULTS.md). The GitHub Actions runner and the
-> results site are next.
+> Work in progress. The sample app, 15 tasks, the runners (local and GitHub Actions) and the
+> gate CLI are in place, and the first 180 runs are in [RESULTS.md](RESULTS.md). Run storage on
+> AWS and a results site are next.
 
 ## Layout
 
@@ -97,6 +97,17 @@ pass or fail. **Escaped** (gates pass, hidden tests fail) is the number that mat
 tests judge behaviour only, so a gate that fails on a correct change is reported as
 **blocked-correct**: noise for a test-based gate, but for a policy gate (scope, protected paths)
 usually a real rule broken by a change that still works.
+
+## GitHub Actions
+
+| Workflow | When | What | Costs |
+|---|---|---|---|
+| `ci` | every push and pull request | Gate CLI tests; task validation; Semgrep rule tests; the 16 scripted traps replayed through the gates, failing if any trap doesn't fail where its header says | nothing |
+| `agent-batch` | started by hand | `runner/full-run.sh` on the chosen tasks, setups and run count, stopping at a spend cap; then `gatekeeper eval`. The results table goes in the job summary and the run directories are uploaded as an artifact | API usage, capped per batch and by the key's own limit |
+
+`agent-batch` needs an `ANTHROPIC_API_KEY` repository secret: the dedicated Gatekeeper key, not a
+personal one. Claude Code is pinned in the workflow, and each run records its version in
+`meta.json`.
 
 ## Setups compared
 

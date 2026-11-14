@@ -1,0 +1,78 @@
+# Runs the agent on tasks and scores the gates. This is the only workflow that spends money: it
+# needs the ANTHROPIC_API_KEY secret (the dedicated Gatekeeper key, which has its own spend limit
+# in the Anthropic console) and runs only when started by hand.
+name: agent-batch
+
+on:
+  workflow_dispatch:
+    inputs:
+      tasks:
+        description: 'Tasks, space-separated (empty = all 15)'
+        default: ''
+      setups:
+        description: 'Setups: A = Haiku, B = Haiku + CLAUDE.md, C = Sonnet + CLAUDE.md'
+        default: 'A B C'
+      runs:
+        description: 'Runs per task and setup'
+        default: '1'
+      cap_usd:
+        description: 'Stop before spending more than this (USD)'
+        default: '2'
+
+permissions:
+  contents: read
+
+# One batch at a time, never cancelled half-way (a cancelled run still costs money).
+concurrency:
+  group: agent-batch
+  cancel-in-progress: false
+
+jobs:
+  batch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      BATCH: gha-${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: jdx/mise-action@v5.2.5
+
+      - name: Install Tally and Claude Code
+        run: |
+          (cd tally && npm ci --no-audit --no-fund)
+          npm install -g --no-audit --no-fund @anthropic-ai/claude-code@2.1.315
+          claude --version
+
+      - name: Run the batch
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TASKS: ${{ inputs.tasks }}
+          SETUPS: ${{ inputs.setups }}
+          RUNS: ${{ inputs.runs }}
+          FULL_CAP_USD: ${{ inputs.cap_usd }}
+        run: |
+          if [[ -z "$ANTHROPIC_API_KEY" ]]; then
+            echo "::error::Set the ANTHROPIC_API_KEY repository secret first."; exit 1
+          fi
+          runner/full-run.sh
+
+      - name: Score the gates against the hidden tests
+        if: always()
+        run: |
+          [[ -d "runs/$BATCH" ]] || exit 0
+          bin/gatekeeper eval "runs/$BATCH" | tee eval.txt
+          bin/gatekeeper eval --format json "runs/$BATCH" > "runs/$BATCH/eval.json"
+          {
+            echo "## Batch $BATCH"
+            echo '```'; node runner/summarize.mjs "runs/$BATCH" | sed -n '/^setup /,$p'; echo '```'
+            echo '```'; cat eval.txt; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v7.0.2
+        if: always()
+        with:
+          name: ${{ env.BATCH }}
+          path: runs/${{ env.BATCH }}/
+          if-no-files-found: ignore
+          retention-days: 90
