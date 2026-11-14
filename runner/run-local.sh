@@ -43,10 +43,7 @@ trap cleanup EXIT
 
 DROP_CLAUDE_MD=$((1 - with_claude_md)) prepare_workdir "$tdir" "$work"
 
-# Base coverage, for the coverage gate. reportOnFailure: a task may start with a red test.
-vitest "$work" --coverage --coverage.reportOnFailure >/dev/null 2>&1 || true
-cp "$work/coverage/coverage-summary.json" "$out/base-coverage.json" 2>/dev/null || true
-rm -rf "$work/coverage"
+save_base_coverage "$work" "$out"
 
 prompt="You are working in the Tally repository (the current directory). Resolve the GitHub issue below. Make the change, run the tests, and finish with a short summary of what you changed and anything you are unsure about.
 
@@ -93,34 +90,10 @@ agent_exit=$?
 set -e
 elapsed=$(( $(date +%s) - start ))
 
-# ---- Collect the change ----------------------------------------------------
-(
-  cd "$work"
-  git add -A
-  git diff --cached base > "$out/diff.patch"
-  git diff --cached --numstat base > "$out/numstat.txt"
-  git diff --cached --name-status base > "$out/name-status.txt"
-)
-
-# ---- Visible tests and coverage on the agent's code -------------------------
-set +e
-vitest "$work" --coverage --coverage.reportOnFailure \
-  --reporter=default --reporter=junit --outputFile.junit="$out/visible-junit.xml" \
-  > "$out/visible.log" 2>&1
-visible_exit=$?
-(cd "$work" && npx tsc --noEmit) > "$out/typecheck.log" 2>&1
-typecheck_exit=$?
-set -e
-cp "$work/coverage/coverage-summary.json" "$out/head-coverage.json" 2>/dev/null || true
-
-# ---- Truth: the hidden tests ------------------------------------------------
-restore_hidden "$tdir" "$work"
-set +e
-vitest "$work" tests/hidden \
-  --reporter=default --reporter=junit --outputFile.junit="$out/hidden-junit.xml" \
-  > "$out/hidden.log" 2>&1
-hidden_exit=$?
-set -e
+# ---- The change, the visible checks, and the truth (the hidden tests) -------
+collect_change "$work" "$out"
+check_change "$work" "$out"
+run_hidden "$tdir" "$work" "$out"
 
 # ---- meta.json ---------------------------------------------------------------
 node - "$out" <<JS

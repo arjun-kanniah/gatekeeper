@@ -1,0 +1,72 @@
+# Trap: Checks future dates against the server's local date, not UTC.
+# Expect gates: none (only the hidden tests catch it)
+# Expect hidden: fail
+# Tests: the reference solution's, minus those that fail on this code.
+diff --git a/src/app.ts b/src/app.ts
+index 85c18e4..d92a1f9 100644
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -12,7 +12,7 @@ import {
+   parseId,
+   requireCents,
+   requireCurrency,
+-  requireDate,
++  requirePastDate,
+   requireString,
+ } from "./validate.ts";
+ 
+@@ -90,7 +90,7 @@ route("POST", "/groups/:groupId/expenses", async ({ db, user, params, req }) =>
+     amountCents: requireCents(body, "amountCents"),
+     currency: requireCurrency(body, "currency"),
+     description: requireString(body, "description", 200),
+-    spentOn: requireDate(body, "spentOn"),
++    spentOn: requirePastDate(body, "spentOn"),
+     splitAmong,
+   });
+   return { status: 201, body: expense };
+diff --git a/src/validate.ts b/src/validate.ts
+index 49fa308..1bcc11d 100644
+--- a/src/validate.ts
++++ b/src/validate.ts
+@@ -42,6 +42,19 @@ export function requireDate(body: Record<string, unknown>, field: string): strin
+   return value;
+ }
+ 
++/**
++ * A date that isn't in the future. Callers can be anywhere from UTC-12 to UTC+14 and the server
++ * doesn't know their timezone, so allow up to one day after today's date in UTC. Uses UTC only,
++ * so the server's own timezone doesn't matter.
++ */
++export function requirePastDate(body: Record<string, unknown>, field: string, now = new Date()): string {
++  const value = requireDate(body, field);
++  const latest = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 12);
++  // Both sides are YYYY-MM-DD, so string comparison is date comparison.
++  if (value > latest.toISOString().slice(0, 10)) throw badRequest(`${field} can't be in the future`);
++  return value;
++}
++
+ export function parseId(raw: string, what: string): number {
+   if (!/^\d+$/.test(raw)) throw badRequest(`Invalid ${what} id`);
+   return Number(raw);
+diff --git a/tests/dates.test.ts b/tests/dates.test.ts
+new file mode 100644
+index 0000000..9c13117
+--- /dev/null
++++ b/tests/dates.test.ts
+@@ -0,0 +1,16 @@
++import { describe, expect, it } from "vitest";
++import { requirePastDate } from "../src/validate.ts";
++
++const at = (iso: string) => new Date(iso);
++
++describe("requirePastDate", () => {
++
++  it("crosses month and year ends", () => {
++    expect(requirePastDate({ d: "2027-01-01" }, "d", at("2026-12-31T20:00:00Z"))).toBe("2027-01-01");
++    expect(() => requirePastDate({ d: "2027-01-02" }, "d", at("2026-12-31T20:00:00Z"))).toThrow();
++  });
++
++  it("allows old dates", () => {
++    expect(requirePastDate({ d: "2001-01-01" }, "d")).toBe("2001-01-01");
++  });
++});

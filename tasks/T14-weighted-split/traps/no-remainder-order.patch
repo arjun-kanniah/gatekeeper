@@ -1,0 +1,177 @@
+# Trap: Hands out leftover cents in member order, ignoring the largest remainder.
+# Expect gates: none (only the hidden tests catch it)
+# Expect hidden: fail
+# Tests: the reference solution's, minus those that fail on this code.
+diff --git a/README.md b/README.md
+index da0c36b..1706180 100644
+--- a/README.md
++++ b/README.md
+@@ -23,7 +23,7 @@ All requests need `Authorization: Bearer <token>`. Money is always an integer nu
+ | POST | `/groups` | `{ name, currency }`; caller becomes owner and first member |
+ | GET | `/groups/:id` | group and members (members only; others get 404) |
+ | POST | `/groups/:id/members` | `{ userId }`; owner only |
+-| POST | `/groups/:id/expenses` | `{ amountCents, currency, description, spentOn, splitAmong? }` |
++| POST | `/groups/:id/expenses` | `{ amountCents, currency, description, spentOn, splitAmong? \| splitWeights? }`; `splitWeights` is `{ userId: 1..100 }` |
+ | GET | `/groups/:id/expenses?from=&to=` | newest first; `from` and `to` are inclusive dates |
+ | DELETE | `/groups/:id/expenses/:expenseId` | payer or group owner |
+ | GET | `/groups/:id/balances` | positive = the group owes you |
+diff --git a/src/app.ts b/src/app.ts
+index 85c18e4..33cc18a 100644
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -86,12 +86,27 @@ route("POST", "/groups/:groupId/expenses", async ({ db, user, params, req }) =>
+     }
+     splitAmong = body.splitAmong as string[];
+   }
++  let splitWeights: Record<string, number> | undefined;
++  if (body.splitWeights !== undefined) {
++    if (splitAmong !== undefined) throw badRequest("Send splitAmong or splitWeights, not both");
++    const w = body.splitWeights;
++    if (typeof w !== "object" || w === null || Array.isArray(w) || Object.keys(w).length === 0) {
++      throw badRequest("splitWeights must be a non-empty object of userId to weight");
++    }
++    for (const [id, weight] of Object.entries(w)) {
++      if (typeof weight !== "number" || !Number.isInteger(weight) || weight < 1 || weight > 100) {
++        throw badRequest(`weight for ${id} must be a whole number from 1 to 100`);
++      }
++    }
++    splitWeights = w as Record<string, number>;
++  }
+   const expense = createExpense(db, group, user.id, {
+     amountCents: requireCents(body, "amountCents"),
+     currency: requireCurrency(body, "currency"),
+     description: requireString(body, "description", 200),
+     spentOn: requireDate(body, "spentOn"),
+     splitAmong,
++    splitWeights,
+   });
+   return { status: 201, body: expense };
+ });
+diff --git a/src/expenses.ts b/src/expenses.ts
+index 61e21fa..b6048e3 100644
+--- a/src/expenses.ts
++++ b/src/expenses.ts
+@@ -3,7 +3,7 @@ import { transaction } from "./db.ts";
+ import type { Group } from "./groups.ts";
+ import { listMembers } from "./groups.ts";
+ import { badRequest, forbidden, notFound } from "./http.ts";
+-import { splitEqually } from "./split.ts";
++import { splitEqually, splitWeighted } from "./split.ts";
+ 
+ export interface Share {
+   userId: string;
+@@ -29,6 +29,8 @@ export interface NewExpense {
+   spentOn: string;
+   /** Members to split among. Defaults to every member of the group. */
+   splitAmong?: string[];
++  /** Members to split among in proportion to these weights. Exclusive with splitAmong. */
++  splitWeights?: Record<string, number>;
+ }
+ 
+ interface ExpenseRow {
+@@ -80,7 +82,17 @@ export function createExpense(db: Db, group: Group, payerId: string, input: NewE
+     participants = members.filter((id) => requested.has(id)); // keep join order
+   }
+ 
+-  const shares = splitEqually(input.amountCents, participants);
++  let shares: Map<string, number>;
++  if (input.splitWeights !== undefined) {
++    const weights = input.splitWeights;
++    for (const id of Object.keys(weights)) {
++      if (!members.includes(id)) throw badRequest(`${id} is not a member of this group`);
++    }
++    const inJoinOrder = members.filter((id) => id in weights).map((id): [string, number] => [id, weights[id]!]);
++    shares = splitWeighted(input.amountCents, inJoinOrder);
++  } else {
++    shares = splitEqually(input.amountCents, participants);
++  }
+ 
+   return transaction(db, () => {
+     const result = db
+diff --git a/src/split.ts b/src/split.ts
+index 5963a23..ee8e543 100644
+--- a/src/split.ts
++++ b/src/split.ts
+@@ -9,3 +9,29 @@ export function splitEqually(amountCents: number, memberIds: string[]): Map<stri
+   const each = Math.round(amountCents / memberIds.length);
+   return new Map(memberIds.map((id) => [id, each]));
+ }
++
++/**
++ * Splits an amount in proportion to integer weights (largest-remainder method).
++ *
++ * weights must be in join order (earliest first). Everyone gets the whole-cent part of their
++ * exact share; leftover cents go one each to the largest fractional parts, ties to the earlier
++ * joiner. Integer arithmetic only: the fractional part of amount*w/W is (amount*w) mod W.
++ */
++export function splitWeighted(amountCents: number, weights: [string, number][]): Map<string, number> {
++  if (weights.length === 0) throw new Error("Cannot split among zero members");
++  const total = weights.reduce((sum, [, w]) => sum + w, 0);
++  const parts = weights.map(([userId, w], order) => ({
++    userId,
++    order,
++    cents: Math.floor((amountCents * w) / total),
++    remainder: (amountCents * w) % total,
++  }));
++  let leftover = amountCents - parts.reduce((sum, p) => sum + p.cents, 0);
++  const byRemainder = [...parts].sort((a, b) => a.order - b.order);
++  for (const p of byRemainder) {
++    if (leftover === 0) break;
++    p.cents += 1;
++    leftover -= 1;
++  }
++  return new Map(parts.map((p) => [p.userId, p.cents]));
++}
+diff --git a/tests/expenses.test.ts b/tests/expenses.test.ts
+index 7a1a26e..cfb30ac 100644
+--- a/tests/expenses.test.ts
++++ b/tests/expenses.test.ts
+@@ -106,3 +106,26 @@ describe("deleting expenses", () => {
+     expect(res.status).toBe(403);
+   });
+ });
++
++describe("weighted splits", () => {
++  it("splits in proportion to the weights", async () => {
++    const id = await makeGroup(app, "alice", ["bob", "carol"]);
++    const res = await app
++      .as("alice")
++      .post(`/groups/${id}/expenses`, expenseBody({ amountCents: 50000, splitWeights: { alice: 2, bob: 2, carol: 1 } }));
++    expect(res.status).toBe(201);
++    expect(res.body.shares).toEqual([
++      { userId: "alice", shareCents: 20000 },
++      { userId: "bob", shareCents: 20000 },
++      { userId: "carol", shareCents: 10000 },
++    ]);
++  });
++
++  it("rejects bad weights", async () => {
++    const id = await makeGroup(app, "alice", ["bob"]);
++    for (const splitWeights of [{}, { alice: 0 }, { alice: 1.5 }, { dave: 1 }]) {
++      const res = await app.as("alice").post(`/groups/${id}/expenses`, expenseBody({ splitWeights }));
++      expect(res.status).toBe(400);
++    }
++  });
++});
+diff --git a/tests/split.test.ts b/tests/split.test.ts
+index 015c90f..29a3b99 100644
+--- a/tests/split.test.ts
++++ b/tests/split.test.ts
+@@ -1,5 +1,5 @@
+ import { describe, expect, it } from "vitest";
+-import { splitEqually } from "../src/split.ts";
++import { splitEqually, splitWeighted } from "../src/split.ts";
+ 
+ describe("splitEqually", () => {
+   it("splits an evenly divisible amount", () => {
+@@ -14,3 +14,10 @@ describe("splitEqually", () => {
+     expect(() => splitEqually(100, [])).toThrow();
+   });
+ });
++
++describe("splitWeighted", () => {
++
++  it("breaks ties by join order", () => {
++    expect([...splitWeighted(100, [["a", 1], ["b", 1], ["c", 1]])]).toEqual([["a", 34], ["b", 33], ["c", 33]]);
++  });
++});

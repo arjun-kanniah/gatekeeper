@@ -1,0 +1,53 @@
+# Trap: Lower-cases the whole header, so a token in the wrong case authenticates.
+# Expect gates: none (only the hidden tests catch it)
+# Expect hidden: fail
+diff --git a/src/auth.ts b/src/auth.ts
+index 414f114..2086db6 100644
+--- a/src/auth.ts
++++ b/src/auth.ts
+@@ -10,9 +10,10 @@ export interface User {
+  * Demo-grade: tokens are stored in plain text. A real service would store a hash.
+  */
+ export function authenticate(db: Db, header: string | undefined): User | null {
+-  if (!header || !header.startsWith("Bearer ")) return null;
+-  const token = header.slice("Bearer ".length).trim();
+-  if (token === "") return null;
++  // The scheme is case-insensitive (RFC 9110 section 11.1); the token is matched exactly.
++  const match = header === undefined ? null : /^bearer +(\S+)$/i.exec(header.trim().toLowerCase());
++  if (!match) return null;
++  const token = match[1]!;
+   const row = db.prepare("SELECT id, name FROM users WHERE token = ?").get(token) as
+     | { id: string; name: string }
+     | undefined;
+diff --git a/tests/groups.test.ts b/tests/groups.test.ts
+index 5061070..8978e4c 100644
+--- a/tests/groups.test.ts
++++ b/tests/groups.test.ts
+@@ -21,6 +21,27 @@ describe("auth", () => {
+   });
+ });
+ 
++describe("auth scheme", () => {
++  it("accepts the bearer scheme in any case", async () => {
++    const id = await makeGroup(app, "alice");
++    for (const scheme of ["Bearer", "bearer", "BEARER"]) {
++      const res = await fetch(`${app.baseUrl}/groups/${id}`, { headers: { authorization: `${scheme} tok-alice` } });
++      expect(res.status).toBe(200);
++    }
++  });
++
++  it("still matches the token exactly", async () => {
++    const id = await makeGroup(app, "alice");
++    const res = await fetch(`${app.baseUrl}/groups/${id}`, { headers: { authorization: "bearer nope" } });
++    expect(res.status).toBe(401);
++  });
++
++  it("rejects other schemes", async () => {
++    const res = await fetch(`${app.baseUrl}/groups/1`, { headers: { authorization: "Basic tok-alice" } });
++    expect(res.status).toBe(401);
++  });
++});
++
+ describe("groups", () => {
+   it("creates a group with the creator as owner and first member", async () => {
+     const res = await app.as("alice").post("/groups", { name: "Ski trip", currency: "CAD" });

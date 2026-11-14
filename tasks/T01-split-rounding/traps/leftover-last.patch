@@ -1,0 +1,19 @@
+# Trap: Leftover cents go to the last members, not the first. Shares still sum to the total.
+# Expect gates: none (only the hidden tests catch it)
+# Expect hidden: fail
+diff --git a/src/split.ts b/src/split.ts
+index 5963a23..1fb6387 100644
+--- a/src/split.ts
++++ b/src/split.ts
+@@ -6,6 +6,9 @@
+  */
+ export function splitEqually(amountCents: number, memberIds: string[]): Map<string, number> {
+   if (memberIds.length === 0) throw new Error("Cannot split among zero members");
+-  const each = Math.round(amountCents / memberIds.length);
+-  return new Map(memberIds.map((id) => [id, each]));
++  // Integer division; the last members absorb the leftover cents.
++  const n = memberIds.length;
++  const base = Math.floor(amountCents / n);
++  const remainder = amountCents - base * n;
++  return new Map(memberIds.map((id, i) => [id, base + (i >= n - remainder ? 1 : 0)]));
+ }

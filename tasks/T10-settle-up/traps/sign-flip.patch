@@ -1,0 +1,109 @@
+# Trap: Settle-up computed with the settlement sign flipped.
+# Expect gates: none (only the hidden tests catch it)
+# Expect hidden: fail
+# Tests: the reference solution's, minus those that fail on this code.
+diff --git a/README.md b/README.md
+index da0c36b..cdb5ed8 100644
+--- a/README.md
++++ b/README.md
+@@ -27,4 +27,5 @@ All requests need `Authorization: Bearer <token>`. Money is always an integer nu
+ | GET | `/groups/:id/expenses?from=&to=` | newest first; `from` and `to` are inclusive dates |
+ | DELETE | `/groups/:id/expenses/:expenseId` | payer or group owner |
+ | GET | `/groups/:id/balances` | positive = the group owes you |
++| GET | `/groups/:id/settle-up` | suggested transfers that bring everyone to zero |
+ | POST | `/groups/:id/settlements` | `{ toUserId, amountCents }`; caller paid `toUserId` |
+diff --git a/src/app.ts b/src/app.ts
+index 85c18e4..91287c8 100644
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -1,7 +1,7 @@
+ import type { IncomingMessage, ServerResponse } from "node:http";
+ import type { User } from "./auth.ts";
+ import { authenticate } from "./auth.ts";
+-import { groupBalances } from "./balances.ts";
++import { groupBalances, settleUp } from "./balances.ts";
+ import type { Db } from "./db.ts";
+ import { createExpense, deleteExpense, listExpenses } from "./expenses.ts";
+ import { addMember, createGroup, listMembers, requireMemberGroup } from "./groups.ts";
+@@ -122,6 +122,11 @@ route("GET", "/groups/:groupId/balances", ({ db, user, params }) => {
+   return { status: 200, body: { currency: group.currency, balances: groupBalances(db, group.id) } };
+ });
+ 
++route("GET", "/groups/:groupId/settle-up", ({ db, user, params }) => {
++  const group = requireMemberGroup(db, parseId(params.groupId!, "group"), user.id);
++  return { status: 200, body: { currency: group.currency, transfers: settleUp(groupBalances(db, group.id)) } };
++});
++
+ route("POST", "/groups/:groupId/settlements", async ({ db, user, params, req }) => {
+   const group = requireMemberGroup(db, parseId(params.groupId!, "group"), user.id);
+   const body = await readJson(req);
+diff --git a/src/balances.ts b/src/balances.ts
+index 103565b..642d71f 100644
+--- a/src/balances.ts
++++ b/src/balances.ts
+@@ -49,3 +49,33 @@ export function groupBalances(db: Db, groupId: number): Balance[] {
+ 
+   return members.map((m) => ({ userId: m.userId, name: m.name, balanceCents: net.get(m.userId) ?? 0 }));
+ }
++
++export interface Transfer {
++  fromUserId: string;
++  toUserId: string;
++  amountCents: number;
++}
++
++/**
++ * Suggested payments that bring everyone to zero: repeatedly, whoever owes the most pays whoever
++ * is owed the most the smaller of the two amounts. Ties go to the earlier-joined member.
++ */
++export function settleUp(balances: Balance[]): Transfer[] {
++  // balances are in join order; keep the index for tie-breaks.
++  const people = balances.map((b, order) => ({ userId: b.userId, cents: b.balanceCents, order }));
++  const pick = (sign: 1 | -1) =>
++    people
++      .filter((p) => p.cents * sign > 0)
++      .sort((a, b) => b.cents * sign - a.cents * sign || a.order - b.order)[0];
++  const transfers: Transfer[] = [];
++  for (;;) {
++    const debtor = pick(-1);
++    const creditor = pick(1);
++    if (!debtor || !creditor) break;
++    const amountCents = Math.min(-debtor.cents, creditor.cents);
++    transfers.push({ fromUserId: debtor.userId, toUserId: creditor.userId, amountCents });
++    debtor.cents += amountCents;
++    creditor.cents -= amountCents;
++  }
++  return transfers;
++}
+diff --git a/tests/settle-up.test.ts b/tests/settle-up.test.ts
+new file mode 100644
+index 0000000..ab2e3a0
+--- /dev/null
++++ b/tests/settle-up.test.ts
+@@ -0,0 +1,26 @@
++import { afterEach, beforeEach, describe, expect, it } from "vitest";
++import { expenseBody, makeGroup, startApp, type TestApp } from "./helpers.ts";
++
++let app: TestApp;
++beforeEach(async () => {
++  app = await startApp();
++});
++afterEach(async () => {
++  await app.close();
++});
++
++describe("settle up", () => {
++  it("suggests who pays whom, earlier-joined first on ties", async () => {
++    const id = await makeGroup(app, "alice", ["bob", "carol"]);
++    await app.as("alice").post(`/groups/${id}/expenses`, expenseBody({ amountCents: 900 }));
++    const res = await app.as("bob").get(`/groups/${id}/settle-up`);
++    expect(res.body).toEqual({
++      currency: "CAD",
++      transfers: [
++        { fromUserId: "bob", toUserId: "alice", amountCents: 300 },
++        { fromUserId: "carol", toUserId: "alice", amountCents: 300 },
++      ],
++    });
++  });
++
++});

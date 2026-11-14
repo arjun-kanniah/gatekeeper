@@ -49,3 +49,54 @@ restore_hidden() {
 vitest() {
   (cd "$1" && shift && NO_COLOR=1 npx vitest run "$@")
 }
+
+# ---- Artifacts the gates and the eval read. run-local.sh and run-traps.sh both use these, so
+# an agent's run and a scripted trap are judged from exactly the same files. -------------------
+
+# save_base_coverage <workdir> <out>: coverage before the change. reportOnFailure: a task may
+# start with a red test.
+save_base_coverage() {
+  local work="$1" out="$2"
+  vitest "$work" --coverage --coverage.reportOnFailure >/dev/null 2>&1 || true
+  cp "$work/coverage/coverage-summary.json" "$out/base-coverage.json" 2>/dev/null || true
+  rm -rf "$work/coverage"
+}
+
+# collect_change <workdir> <out>: the change as diff.patch, numstat.txt, name-status.txt.
+collect_change() {
+  local work="$1" out="$2"
+  (
+    cd "$work"
+    git add -A
+    git diff --cached base > "$out/diff.patch"
+    git diff --cached --numstat base > "$out/numstat.txt"
+    git diff --cached --name-status base > "$out/name-status.txt"
+  )
+}
+
+# check_change <workdir> <out>: visible tests (JUnit + coverage) and the type check on the
+# changed code. Sets visible_exit and typecheck_exit.
+check_change() {
+  local work="$1" out="$2"
+  set +e
+  vitest "$work" --coverage --coverage.reportOnFailure \
+    --reporter=default --reporter=junit --outputFile.junit="$out/visible-junit.xml" \
+    > "$out/visible.log" 2>&1
+  visible_exit=$?
+  (cd "$work" && npx tsc --noEmit) > "$out/typecheck.log" 2>&1
+  typecheck_exit=$?
+  set -e
+  cp "$work/coverage/coverage-summary.json" "$out/head-coverage.json" 2>/dev/null || true
+}
+
+# run_hidden <task_dir> <workdir> <out>: the truth. Sets hidden_exit.
+run_hidden() {
+  local tdir="$1" work="$2" out="$3"
+  restore_hidden "$tdir" "$work"
+  set +e
+  vitest "$work" tests/hidden \
+    --reporter=default --reporter=junit --outputFile.junit="$out/hidden-junit.xml" \
+    > "$out/hidden.log" 2>&1
+  hidden_exit=$?
+  set -e
+}

@@ -1,0 +1,117 @@
+# Trap: Builds the summary on the list query's exclusive `to`, so the last day is missed.
+# Expect gates: none (only the hidden tests catch it)
+# Expect hidden: fail
+# Tests: the reference solution's, minus those that fail on this code.
+diff --git a/src/app.ts b/src/app.ts
+index 85c18e4..34e7f5b 100644
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -3,7 +3,7 @@ import type { User } from "./auth.ts";
+ import { authenticate } from "./auth.ts";
+ import { groupBalances } from "./balances.ts";
+ import type { Db } from "./db.ts";
+-import { createExpense, deleteExpense, listExpenses } from "./expenses.ts";
++import { createExpense, deleteExpense, listExpenses, summarize } from "./expenses.ts";
+ import { addMember, createGroup, listMembers, requireMemberGroup } from "./groups.ts";
+ import { badRequest, HttpError, notFound, readJson, sendJson } from "./http.ts";
+ import { recordSettlement } from "./settlements.ts";
+@@ -96,8 +96,7 @@ route("POST", "/groups/:groupId/expenses", async ({ db, user, params, req }) =>
+   return { status: 201, body: expense };
+ });
+ 
+-route("GET", "/groups/:groupId/expenses", ({ db, user, params, query }) => {
+-  const group = requireMemberGroup(db, parseId(params.groupId!, "group"), user.id);
++function dateRange(query: URLSearchParams): { from?: string; to?: string } {
+   const from = query.get("from") ?? undefined;
+   const to = query.get("to") ?? undefined;
+   for (const [name, value] of [
+@@ -106,7 +105,26 @@ route("GET", "/groups/:groupId/expenses", ({ db, user, params, query }) => {
+   ] as const) {
+     if (value !== undefined && !isIsoDate(value)) throw badRequest(`${name} must be YYYY-MM-DD`);
+   }
+-  return { status: 200, body: { expenses: listExpenses(db, group.id, { from, to }) } };
++  return { from, to };
++}
++
++route("GET", "/groups/:groupId/expenses", ({ db, user, params, query }) => {
++  const group = requireMemberGroup(db, parseId(params.groupId!, "group"), user.id);
++  return { status: 200, body: { expenses: listExpenses(db, group.id, dateRange(query)) } };
++});
++
++route("GET", "/groups/:groupId/summary", ({ db, user, params, query }) => {
++  const group = requireMemberGroup(db, parseId(params.groupId!, "group"), user.id);
++  const range = dateRange(query);
++  return {
++    status: 200,
++    body: {
++      currency: group.currency,
++      from: range.from ?? null,
++      to: range.to ?? null,
++      ...summarize(db, group.id, range),
++    },
++  };
+ });
+ 
+ route("DELETE", "/groups/:groupId/expenses/:expenseId", ({ db, user, params }) => {
+diff --git a/src/expenses.ts b/src/expenses.ts
+index 61e21fa..b43cb7d 100644
+--- a/src/expenses.ts
++++ b/src/expenses.ts
+@@ -147,3 +147,33 @@ export function deleteExpense(db: Db, group: Group, actorId: string, expenseId:
+   }
+   db.prepare("DELETE FROM expenses WHERE id = ?").run(expenseId);
+ }
++
++export interface MemberSummary {
++  userId: string;
++  name: string;
++  paidCents: number;
++  shareCents: number;
++}
++
++/** Totals per member for the expenses in a date range (both ends inclusive). */
++export function summarize(db: Db, groupId: number, filter: ExpenseFilter = {}) {
++  const expenses = listExpenses(db, groupId, filter);
++  const members: MemberSummary[] = listMembers(db, groupId).map((m) => ({
++    userId: m.userId,
++    name: m.name,
++    paidCents: 0,
++    shareCents: 0,
++  }));
++  const byId = new Map(members.map((m) => [m.userId, m]));
++  let totalCents = 0;
++  for (const e of expenses) {
++    totalCents += e.amountCents;
++    const payer = byId.get(e.payerId);
++    if (payer) payer.paidCents += e.amountCents;
++    for (const s of e.shares) {
++      const m = byId.get(s.userId);
++      if (m) m.shareCents += s.shareCents;
++    }
++  }
++  return { totalCents, members };
++}
+diff --git a/tests/summary.test.ts b/tests/summary.test.ts
+new file mode 100644
+index 0000000..9db63a9
+--- /dev/null
++++ b/tests/summary.test.ts
+@@ -0,0 +1,18 @@
++import { afterEach, beforeEach, describe, expect, it } from "vitest";
++import { expenseBody, makeGroup, startApp, type TestApp } from "./helpers.ts";
++
++let app: TestApp;
++beforeEach(async () => {
++  app = await startApp();
++});
++afterEach(async () => {
++  await app.close();
++});
++
++describe("summary", () => {
++
++  it("rejects a malformed date", async () => {
++    const id = await makeGroup(app, "alice");
++    expect((await app.as("alice").get(`/groups/${id}/summary?to=soon`)).status).toBe(400);
++  });
++});

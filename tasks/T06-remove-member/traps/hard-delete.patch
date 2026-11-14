@@ -1,0 +1,155 @@
+# Trap: Hard-deletes the membership row; past expenses lose the member's shares.
+# Expect gates: none (only the hidden tests catch it)
+# Expect hidden: fail
+# Tests: the reference solution's, minus those that fail on this code.
+diff --git a/README.md b/README.md
+index da0c36b..933b8da 100644
+--- a/README.md
++++ b/README.md
+@@ -23,6 +23,7 @@ All requests need `Authorization: Bearer <token>`. Money is always an integer nu
+ | POST | `/groups` | `{ name, currency }`; caller becomes owner and first member |
+ | GET | `/groups/:id` | group and members (members only; others get 404) |
+ | POST | `/groups/:id/members` | `{ userId }`; owner only |
++| DELETE | `/groups/:id/members/:userId` | owner removes a member, or a member leaves; balance must be zero |
+ | POST | `/groups/:id/expenses` | `{ amountCents, currency, description, spentOn, splitAmong? }` |
+ | GET | `/groups/:id/expenses?from=&to=` | newest first; `from` and `to` are inclusive dates |
+ | DELETE | `/groups/:id/expenses/:expenseId` | payer or group owner |
+diff --git a/migrations/002_membership_left_at.sql b/migrations/002_membership_left_at.sql
+new file mode 100644
+index 0000000..14208c3
+--- /dev/null
++++ b/migrations/002_membership_left_at.sql
+@@ -0,0 +1,3 @@
++-- Members can leave a group. The membership row is kept (so past expenses keep their shares and
++-- join order) and marked with the time they left. NULL = current member.
++ALTER TABLE memberships ADD COLUMN left_at TEXT;
+diff --git a/src/app.ts b/src/app.ts
+index 85c18e4..bcdd0d9 100644
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -4,7 +4,7 @@ import { authenticate } from "./auth.ts";
+ import { groupBalances } from "./balances.ts";
+ import type { Db } from "./db.ts";
+ import { createExpense, deleteExpense, listExpenses } from "./expenses.ts";
+-import { addMember, createGroup, listMembers, requireMemberGroup } from "./groups.ts";
++import { addMember, createGroup, listMembers, removeMember, requireMemberGroup } from "./groups.ts";
+ import { badRequest, HttpError, notFound, readJson, sendJson } from "./http.ts";
+ import { recordSettlement } from "./settlements.ts";
+ import {
+@@ -74,6 +74,12 @@ route("POST", "/groups/:groupId/members", async ({ db, user, params, req }) => {
+   return { status: 201, body: { members: addMember(db, group, user.id, userId) } };
+ });
+ 
++route("DELETE", "/groups/:groupId/members/:userId", ({ db, user, params }) => {
++  const group = requireMemberGroup(db, parseId(params.groupId!, "group"), user.id);
++  removeMember(db, group, user.id, params.userId!);
++  return { status: 204 };
++});
++
+ // ---- Expenses -----------------------------------------------------------
+ 
+ route("POST", "/groups/:groupId/expenses", async ({ db, user, params, req }) => {
+diff --git a/src/groups.ts b/src/groups.ts
+index 52b1237..be59aa9 100644
+--- a/src/groups.ts
++++ b/src/groups.ts
+@@ -1,5 +1,6 @@
+ import type { Db } from "./db.ts";
+ import { transaction } from "./db.ts";
++import { groupBalances } from "./balances.ts";
+ import { badRequest, forbidden, HttpError, notFound } from "./http.ts";
+ 
+ export interface Group {
+@@ -49,8 +50,9 @@ export function getGroup(db: Db, groupId: number): Group | null {
+ 
+ export function isMember(db: Db, groupId: number, userId: string): boolean {
+   return (
+-    db.prepare("SELECT 1 FROM memberships WHERE group_id = ? AND user_id = ?").get(groupId, userId) !==
+-    undefined
++    db
++      .prepare("SELECT 1 FROM memberships WHERE group_id = ? AND user_id = ? AND left_at IS NULL")
++      .get(groupId, userId) !== undefined
+   );
+ }
+ 
+@@ -70,7 +72,7 @@ export function listMembers(db: Db, groupId: number): Member[] {
+     .prepare(
+       `SELECT m.user_id AS userId, u.name AS name
+          FROM memberships m JOIN users u ON u.id = m.user_id
+-        WHERE m.group_id = ?
++        WHERE m.group_id = ? AND m.left_at IS NULL
+         ORDER BY m.id`,
+     )
+     .all(groupId) as unknown as Member[];
+@@ -81,6 +83,32 @@ export function addMember(db: Db, group: Group, actorId: string, userId: string)
+   const user = db.prepare("SELECT id FROM users WHERE id = ?").get(userId);
+   if (!user) throw badRequest("Unknown user");
+   if (isMember(db, group.id, userId)) throw new HttpError(409, "conflict", "Already a member");
+-  db.prepare("INSERT INTO memberships (group_id, user_id) VALUES (?, ?)").run(group.id, userId);
++  // Someone who left keeps their old row (and join order); bring it back instead of adding one.
++  const rejoined = db
++    .prepare("UPDATE memberships SET left_at = NULL WHERE group_id = ? AND user_id = ?")
++    .run(group.id, userId);
++  if (rejoined.changes === 0) {
++    db.prepare("INSERT INTO memberships (group_id, user_id) VALUES (?, ?)").run(group.id, userId);
++  }
+   return listMembers(db, group.id);
+ }
++
++/**
++ * The owner removes a member, or a member leaves. The membership is marked as left rather than
++ * deleted, so past expenses keep the member's shares.
++ */
++export function removeMember(db: Db, group: Group, actorId: string, userId: string): void {
++  if (actorId !== group.ownerId && actorId !== userId) {
++    throw forbidden("Only the group owner can remove other members");
++  }
++  if (userId === group.ownerId) throw badRequest("The owner can't leave the group");
++  if (!isMember(db, group.id, userId)) throw notFound("Not a member of this group");
++  const balance = groupBalances(db, group.id).find((b) => b.userId === userId);
++  if (balance && balance.balanceCents !== 0) {
++    throw new HttpError(409, "conflict", "Settle up before leaving the group");
++  }
++  db.prepare("DELETE FROM memberships WHERE group_id = ? AND user_id = ?").run(
++    group.id,
++    userId,
++  );
++}
+diff --git a/tests/members.test.ts b/tests/members.test.ts
+new file mode 100644
+index 0000000..13711b6
+--- /dev/null
++++ b/tests/members.test.ts
+@@ -0,0 +1,32 @@
++import { afterEach, beforeEach, describe, expect, it } from "vitest";
++import { expenseBody, makeGroup, startApp, type TestApp } from "./helpers.ts";
++
++let app: TestApp;
++beforeEach(async () => {
++  app = await startApp();
++});
++afterEach(async () => {
++  await app.close();
++});
++
++describe("removing members", () => {
++
++  it("refuses while the balance isn't zero", async () => {
++    const id = await makeGroup(app, "alice", ["bob"]);
++    await app.as("alice").post(`/groups/${id}/expenses`, expenseBody({ amountCents: 1000 }));
++    expect((await app.as("alice").delete(`/groups/${id}/members/bob`)).status).toBe(409);
++  });
++
++  it("checks who may remove whom", async () => {
++    const id = await makeGroup(app, "alice", ["bob", "carol"]);
++    expect((await app.as("bob").delete(`/groups/${id}/members/carol`)).status).toBe(403);
++    expect((await app.as("alice").delete(`/groups/${id}/members/alice`)).status).toBe(400);
++    expect((await app.as("alice").delete(`/groups/${id}/members/dave`)).status).toBe(404);
++  });
++
++  it("lets the owner add someone back", async () => {
++    const id = await makeGroup(app, "alice", ["bob"]);
++    await app.as("alice").delete(`/groups/${id}/members/bob`);
++    expect((await app.as("alice").post(`/groups/${id}/members`, { userId: "bob" })).status).toBe(201);
++  });
++});

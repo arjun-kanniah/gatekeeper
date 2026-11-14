@@ -1,9 +1,10 @@
 # Results so far
 
 Two local batches, 13–14 November 2026: 15 tasks × 3 setups × 2 runs = 90 runs each, 180 in all,
-for $5.12. Run output is in `runs/` (not committed). The gate CLI doesn't exist yet, so "passed the
-gates" here means the visible tests passed. The numbers come from `node runner/summarize.mjs
-runs/<batch>`.
+for $5.12. Run output is in `runs/` (not committed). The run tables below count an escape as
+"visible tests passed, hidden tests failed", from `node runner/summarize.mjs runs/<batch>`. The
+gate CLI came later: [The gates on these runs](#the-gates-on-these-runs) replays both batches
+through it, and [Scripted traps](#scripted-traps) checks each gate against a known-bad change.
 
 ## Setup
 
@@ -23,9 +24,8 @@ git status/diff/log, and `ls`. The prompt is the issue text. After the run:
 A run where the visible tests pass and the hidden tests fail is an **escaped defect**.
 
 Each task's hidden tests fail on the starting code. The reference solution passes the visible
-tests, the hidden tests and the type check. For T04–T15
-except T12, a scripted version of the task's trap passes the visible tests and fails the hidden
-ones. T12's trap is an open-ended refactor, and T01–T03's traps aren't scripted yet.
+tests, the hidden tests and the type check. Every task except T12 also has a scripted version of
+its trap (see [Scripted traps](#scripted-traps)). T12's trap is an open-ended refactor.
 
 Diff budgets count source only (`src/`, `migrations/`). They come from one rule, not tuned per
 task: the reference fix's lines × 2.5, rounded up to 10, with a minimum of 30; and the reference
@@ -104,6 +104,78 @@ extended `import` line. The summarizer now counts only removed or rewritten
 
 **Cost.** Sonnet costs about 9× Haiku per run ($0.062 against $0.007 in v2) and is a little faster.
 
+## The gates on these runs
+
+`gatekeeper eval runs/<batch>` replays a batch through all ten gates from the saved artifacts,
+with no re-run. It then scores each run against the hidden tests. Static analysis is skipped
+everywhere: there's no Semgrep step yet.
+
+| Batch | Accepted | Caught | Escaped the gates | Blocked a correct change |
+|---|---|---|---|---|
+| v1 | 78 | 4 | 2 | 6 |
+| v2 | 82 | 0 | 1 | 7 |
+
+- **Coverage caught v1's real escape.** T10 B-r2's untested settle-up code dropped line coverage.
+- **`has-change` caught v1's three give-ups**, the runs that ended with no source change.
+- **v1's two remaining "escapes" are T04 A** failing the `[latent]` check. v1's hidden-test results
+  predate that tag, so the eval can't tell them apart. They aren't defects in the change.
+- **v2's escape, T11 C-r2, passes every gate.** That's Sonnet's oldest-first sort. Nothing short
+  of the hidden tests, or a reviewer reading the agent's summary, sees it.
+- **Every block of a correct change broke a real rule:**
+  - T07 A ×2 edited the protected `tests/helpers.ts`, which is the task's trap.
+  - T12 took the optional refactor and went over the diff budget.
+  - T08 A was 1 line over its budget.
+  - T08 C dropped coverage 2.3 points.
+
+  The hidden tests judge behaviour only, so for a policy gate these blocks are the gate doing
+  its job.
+
+## Scripted traps
+
+Each task's trap is a patch in `tasks/Txx-*/traps/`. Its header names the gates that should fail
+and whether the hidden tests should. `runner/run-traps.sh` puts each patch through the same
+pipeline as an agent's run, scores the batch with `gatekeeper eval`, and checks each trap against
+its header. It makes no API calls. All 16 traps behave as their headers say.
+
+Most traps are a plausible wrong fix. A wrong fix with no tests would trip the coverage gate just
+for being untested, which says nothing. So each trap carries the reference solution's tests,
+minus the ones that fail on its code. That's the nearest scripted stand-in for an agent that
+believes its own wrong fix.
+
+| Trap | What it gets wrong | Gates that failed |
+|---|---|---|
+| T01 leftover-last | leftover cents to the last members | none |
+| T02 edit-expected | rewrites the failing test's expected values | tests-not-weakened, has-change |
+| T02 skip-test | skips the failing test | tests-not-weakened, has-change, coverage |
+| T03 edit-init-migration | edits `001_init.sql` instead of adding a migration | migrations, coverage |
+| T04 to-exclusive | summary misses the last day | coverage* |
+| T05 generic-error | `bad_request` instead of `currency_mismatch` | coverage* |
+| T06 hard-delete | deleting the membership loses history | none |
+| T07 current-members | re-splits among current members | coverage* |
+| T07 helpers-patch | correct fix, but edits protected `tests/helpers.ts` | protected-paths (hidden tests pass) |
+| T08 offset-cursor | offset cursor skips/repeats rows | coverage* |
+| T09 double-limit | doubles the UTF-16 limit | none |
+| T10 sign-flip | settlement sign flipped | none |
+| T11 oldest-first | oldest first (v2's real escape) | none |
+| T13 lowercase-token | wrong-case tokens authenticate | none |
+| T14 no-remainder-order | leftover cents in member order | none |
+| T15 local-date | server-local date instead of UTC | none |
+
+\* The reference solutions keep coverage at 95–96%. These traps lose it only because the test
+that would have caught them was dropped, which leaves the faulty path untested. An agent that
+believes its wrong fix would usually test that path too, so count these as an upper bound.
+
+What this shows:
+
+- **The rule gates catch the rule-breaking traps.** `tests-not-weakened`, `migrations` and
+  `protected-paths` each caught the trap they exist for.
+- **No gate catches a plausible wrong fix.** 15 of the traps are defects:
+  - 3 broke a rule, and a rule gate caught each one.
+  - 12 are plausible wrong fixes. 8 of them passed every gate. The other 4 were stopped only by
+    coverage, with the caveat above.
+- **The two real escapes in the batches were the plausible kind too:** T10 in v1 and T11 in v2.
+  Wrong behaviour that breaks no rule is what only behavioural tests, or a reviewer, will find.
+
 ## What this means for the gates
 
 At 2 runs per task, escapes are too rare to rank the setups (1 in 90 per batch). Telling them
@@ -126,4 +198,5 @@ So the gate CLI's job is less "catch the bug the tests missed" and more:
 - 2 runs per task per setup per batch.
 - One model family.
 - Escape counts at this size are anecdotes, not rates.
-- The gates aren't built yet; "visible tests pass" stands in for them.
+- The traps were written by the same person as the tasks, and their tests are an approximation.
+- No static analysis yet.

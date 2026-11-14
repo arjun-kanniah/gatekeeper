@@ -1,0 +1,56 @@
+# Trap: Doubles the UTF-16 length limit instead of counting code points.
+# Expect gates: none (only the hidden tests catch it)
+# Expect hidden: fail
+# Tests: the reference solution's, minus those that fail on this code.
+diff --git a/src/validate.ts b/src/validate.ts
+index 49fa308..1ce8c0a 100644
+--- a/src/validate.ts
++++ b/src/validate.ts
+@@ -1,12 +1,25 @@
+ import { badRequest } from "./http.ts";
+ 
++/**
++ * A required, trimmed string. Its length is counted in Unicode code points after trimming, so
++ * "🍕" counts as one character (String#length would count it as two).
++ */
+ export function requireString(body: Record<string, unknown>, field: string, maxLength = 200): string {
+   const value = body[field];
+   if (typeof value !== "string" || value.trim() === "") {
+     throw badRequest(`${field} is required`);
+   }
+-  if (value.length > maxLength) throw badRequest(`${field} must be at most ${maxLength} characters`);
+-  return value.trim();
++  const trimmed = value.trim();
++  if (trimmed.length > maxLength * 2) {
++    throw badRequest(`${field} must be at most ${maxLength} characters`);
++  }
++  return trimmed;
++}
++
++export function codePointLength(text: string): number {
++  let n = 0;
++  for (const _ of text) n++;
++  return n;
+ }
+ 
+ /** Money is always an integer number of cents (minor units). Never floats. */
+diff --git a/tests/validate.test.ts b/tests/validate.test.ts
+new file mode 100644
+index 0000000..a5d2002
+--- /dev/null
++++ b/tests/validate.test.ts
+@@ -0,0 +1,14 @@
++import { describe, expect, it } from "vitest";
++import { codePointLength, requireString } from "../src/validate.ts";
++
++describe("requireString", () => {
++  it("counts emoji as one character", () => {
++    expect(codePointLength("🍕日本")).toBe(3);
++    expect(requireString({ d: "🍕".repeat(200) }, "d", 200)).toBe("🍕".repeat(200));
++    expect(() => requireString({ d: "🍕".repeat(201) }, "d", 200)).toThrow();
++  });
++
++  it("checks the length after trimming", () => {
++    expect(requireString({ d: `  ${"x".repeat(10)}  ` }, "d", 10)).toBe("x".repeat(10));
++  });
++});

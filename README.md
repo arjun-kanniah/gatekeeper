@@ -18,7 +18,7 @@ gate and were still wrong.
 | Path | What |
 |---|---|
 | `tally/` | The sample app: a small expense-splitting API (TypeScript, `node:sqlite`, Vitest). |
-| `tasks/Txx-*/` | One task each: `issue.md` (what the agent sees), `task.yaml` (budgets, what's allowed), `hidden/` (acceptance tests), `overlay/` (files changed before the run), `solution.patch` (a reference fix). |
+| `tasks/Txx-*/` | One task each: `issue.md` (what the agent sees), `task.yaml` (budgets, what's allowed), `hidden/` (acceptance tests), `overlay/` (files changed before the run), `solution.patch` (a reference fix), `traps/` (scripted wrong changes, each naming the gates that should catch it). |
 | `runner/` | Scripts that prepare a clean copy, run the agent, and collect the diff, test results, coverage and cost. |
 | `cmd/gatekeeper/`, `internal/` | The gate CLI (Go, standard library plus a YAML parser). |
 | `gates.yaml` | Tally's gate policy: what counts as source and tests, protected paths, migrations, thresholds. |
@@ -32,6 +32,8 @@ works in a fresh copy of `tally/` that never contains them.
 cd tally && npm install && cd ..
 runner/validate-tasks.sh          # no API calls: checks every task's hidden tests fail on the
                                   # base code and pass with the reference fix
+runner/run-traps.sh               # no API calls: puts each scripted trap through the pipeline
+                                  # and the gates, and checks it fails where its header says
 cp .env.example .env              # add an API key with a spend limit
 runner/run-local.sh T01 B 1       # one task, one setup, one run
 runner/pilot.sh                   # the pilot: 3 tasks x 3 setups

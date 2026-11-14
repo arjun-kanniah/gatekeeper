@@ -1,0 +1,94 @@
+# Trap: Adds the notes column to migrations/001_init.sql instead of a new 002 migration.
+# Expect gates: migrations
+# Expect hidden: fail
+diff --git a/migrations/001_init.sql b/migrations/001_init.sql
+index 0b66280..cd66c4e 100644
+--- a/migrations/001_init.sql
++++ b/migrations/001_init.sql
+@@ -30,6 +30,7 @@ CREATE TABLE expenses (
+   currency     TEXT NOT NULL,
+   description  TEXT NOT NULL,
+   spent_on     TEXT NOT NULL, -- YYYY-MM-DD
++  notes        TEXT,
+   created_at   TEXT NOT NULL
+ );
+ 
+diff --git a/src/app.ts b/src/app.ts
+index 85c18e4..4041de9 100644
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -86,11 +86,19 @@ route("POST", "/groups/:groupId/expenses", async ({ db, user, params, req }) =>
+     }
+     splitAmong = body.splitAmong as string[];
+   }
++  let notes: string | null = null;
++  if (body.notes !== undefined && body.notes !== null) {
++    if (typeof body.notes !== "string") throw badRequest("notes must be a string");
++    const trimmed = body.notes.trim();
++    if (trimmed.length > 500) throw badRequest("notes must be at most 500 characters");
++    notes = trimmed === "" ? null : trimmed;
++  }
+   const expense = createExpense(db, group, user.id, {
+     amountCents: requireCents(body, "amountCents"),
+     currency: requireCurrency(body, "currency"),
+     description: requireString(body, "description", 200),
+     spentOn: requireDate(body, "spentOn"),
++    notes,
+     splitAmong,
+   });
+   return { status: 201, body: expense };
+diff --git a/src/expenses.ts b/src/expenses.ts
+index 61e21fa..e17ab28 100644
+--- a/src/expenses.ts
++++ b/src/expenses.ts
+@@ -18,6 +18,7 @@ export interface Expense {
+   currency: string;
+   description: string;
+   spentOn: string;
++  notes: string | null;
+   createdAt: string;
+   shares: Share[];
+ }
+@@ -27,6 +28,7 @@ export interface NewExpense {
+   currency: string;
+   description: string;
+   spentOn: string;
++  notes?: string | null;
+   /** Members to split among. Defaults to every member of the group. */
+   splitAmong?: string[];
+ }
+@@ -39,6 +41,7 @@ interface ExpenseRow {
+   currency: string;
+   description: string;
+   spent_on: string;
++  notes: string | null;
+   created_at: string;
+ }
+ 
+@@ -63,6 +66,7 @@ const toExpense = (db: Db, r: ExpenseRow): Expense => ({
+   currency: r.currency,
+   description: r.description,
+   spentOn: r.spent_on,
++  notes: r.notes ?? null,
+   createdAt: r.created_at,
+   shares: loadShares(db, r.id),
+ });
+@@ -85,8 +89,8 @@ export function createExpense(db: Db, group: Group, payerId: string, input: NewE
+   return transaction(db, () => {
+     const result = db
+       .prepare(
+-        `INSERT INTO expenses (group_id, payer_id, amount_cents, currency, description, spent_on, created_at)
+-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
++        `INSERT INTO expenses (group_id, payer_id, amount_cents, currency, description, spent_on, notes, created_at)
++         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+       )
+       .run(
+         group.id,
+@@ -95,6 +99,7 @@ export function createExpense(db: Db, group: Group, payerId: string, input: NewE
+         input.currency,
+         input.description,
+         input.spentOn,
++        input.notes ?? null,
+         new Date().toISOString(),
+       );
+     const expenseId = Number(result.lastInsertRowid);

@@ -1,0 +1,134 @@
+# Trap: Offset-based cursor: pages skip or repeat rows when expenses are added between requests.
+# Expect gates: none (only the hidden tests catch it)
+# Expect hidden: fail
+# Tests: the reference solution's, minus those that fail on this code.
+diff --git a/README.md b/README.md
+index da0c36b..070a816 100644
+--- a/README.md
++++ b/README.md
+@@ -24,7 +24,7 @@ All requests need `Authorization: Bearer <token>`. Money is always an integer nu
+ | GET | `/groups/:id` | group and members (members only; others get 404) |
+ | POST | `/groups/:id/members` | `{ userId }`; owner only |
+ | POST | `/groups/:id/expenses` | `{ amountCents, currency, description, spentOn, splitAmong? }` |
+-| GET | `/groups/:id/expenses?from=&to=` | newest first; `from` and `to` are inclusive dates |
++| GET | `/groups/:id/expenses?from=&to=&limit=&cursor=` | newest first; `from` and `to` are inclusive dates; pages of `limit` (default 50, max 100), pass `nextCursor` back as `cursor` |
+ | DELETE | `/groups/:id/expenses/:expenseId` | payer or group owner |
+ | GET | `/groups/:id/balances` | positive = the group owes you |
+ | POST | `/groups/:id/settlements` | `{ toUserId, amountCents }`; caller paid `toUserId` |
+diff --git a/src/app.ts b/src/app.ts
+index 85c18e4..86d4453 100644
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -3,7 +3,7 @@ import type { User } from "./auth.ts";
+ import { authenticate } from "./auth.ts";
+ import { groupBalances } from "./balances.ts";
+ import type { Db } from "./db.ts";
+-import { createExpense, deleteExpense, listExpenses } from "./expenses.ts";
++import { createExpense, deleteExpense, listExpenses, type ExpenseCursor } from "./expenses.ts";
+ import { addMember, createGroup, listMembers, requireMemberGroup } from "./groups.ts";
+ import { badRequest, HttpError, notFound, readJson, sendJson } from "./http.ts";
+ import { recordSettlement } from "./settlements.ts";
+@@ -106,9 +106,36 @@ route("GET", "/groups/:groupId/expenses", ({ db, user, params, query }) => {
+   ] as const) {
+     if (value !== undefined && !isIsoDate(value)) throw badRequest(`${name} must be YYYY-MM-DD`);
+   }
+-  return { status: 200, body: { expenses: listExpenses(db, group.id, { from, to }) } };
++  const limitRaw = query.get("limit");
++  let limit = 50;
++  if (limitRaw !== null) {
++    if (!/^\d+$/.test(limitRaw) || Number(limitRaw) < 1 || Number(limitRaw) > 100) {
++      throw badRequest("limit must be a whole number from 1 to 100");
++    }
++    limit = Number(limitRaw);
++  }
++  const cursorRaw = query.get("cursor");
++  const offset = cursorRaw === null ? 0 : Number(cursorRaw); if (!Number.isInteger(offset) || cursorRaw === "") throw badRequest("Invalid cursor");
++  // Fetch one extra row to know whether there is another page.
++  const rows = listExpenses(db, group.id, { from, to }).slice(offset, offset + limit + 1);
++  const expenses = rows.slice(0, limit);
++  const last = expenses[expenses.length - 1];
++  const nextCursor = rows.length > limit && last ? String(offset + limit) : null;
++  return { status: 200, body: { expenses, nextCursor } };
+ });
+ 
++function encodeCursor(c: ExpenseCursor): string {
++  return Buffer.from(`${c.spentOn}|${c.id}`, "utf8").toString("base64url");
++}
++
++function decodeCursor(raw: string): ExpenseCursor {
++  const [spentOn, id, ...rest] = Buffer.from(raw, "base64url").toString("utf8").split("|");
++  if (rest.length > 0 || !spentOn || !isIsoDate(spentOn) || !id || !/^\d+$/.test(id)) {
++    throw badRequest("Invalid cursor");
++  }
++  return { spentOn, id: Number(id) };
++}
++
+ route("DELETE", "/groups/:groupId/expenses/:expenseId", ({ db, user, params }) => {
+   const group = requireMemberGroup(db, parseId(params.groupId!, "group"), user.id);
+   deleteExpense(db, group, user.id, parseId(params.expenseId!, "expense"));
+diff --git a/src/expenses.ts b/src/expenses.ts
+index 61e21fa..42db2b1 100644
+--- a/src/expenses.ts
++++ b/src/expenses.ts
+@@ -118,6 +118,15 @@ export interface ExpenseFilter {
+   from?: string;
+   /** Inclusive end date, YYYY-MM-DD. */
+   to?: string;
++  /** Only expenses that sort after this position (from a previous page). */
++  after?: ExpenseCursor;
++  limit?: number;
++}
++
++/** A position in the list order (spent_on DESC, id DESC). Stable while rows are added or removed. */
++export interface ExpenseCursor {
++  spentOn: string;
++  id: number;
+ }
+ 
+ /** Lists a group's expenses, newest spending date first. Both range ends are inclusive. */
+@@ -132,9 +141,16 @@ export function listExpenses(db: Db, groupId: number, filter: ExpenseFilter = {}
+     clauses.push("spent_on < ?");
+     params.push(filter.to);
+   }
+-  const rows = db
+-    .prepare(`SELECT * FROM expenses WHERE ${clauses.join(" AND ")} ORDER BY spent_on DESC, id DESC`)
+-    .all(...params) as unknown as ExpenseRow[];
++  if (filter.after) {
++    clauses.push("(spent_on < ? OR (spent_on = ? AND id < ?))");
++    params.push(filter.after.spentOn, filter.after.spentOn, filter.after.id);
++  }
++  let sql = `SELECT * FROM expenses WHERE ${clauses.join(" AND ")} ORDER BY spent_on DESC, id DESC`;
++  if (filter.limit !== undefined) {
++    sql += " LIMIT ?";
++    params.push(filter.limit);
++  }
++  const rows = db.prepare(sql).all(...params) as unknown as ExpenseRow[];
+   return rows.map((r) => toExpense(db, r));
+ }
+ 
+diff --git a/tests/pagination.test.ts b/tests/pagination.test.ts
+new file mode 100644
+index 0000000..6d1649f
+--- /dev/null
++++ b/tests/pagination.test.ts
+@@ -0,0 +1,20 @@
++import { afterEach, beforeEach, describe, expect, it } from "vitest";
++import { expenseBody, makeGroup, startApp, type TestApp } from "./helpers.ts";
++
++let app: TestApp;
++beforeEach(async () => {
++  app = await startApp();
++});
++afterEach(async () => {
++  await app.close();
++});
++
++describe("expense pagination", () => {
++
++  it("rejects a bad limit or cursor", async () => {
++    const id = await makeGroup(app, "alice");
++    expect((await app.as("alice").get(`/groups/${id}/expenses?limit=0`)).status).toBe(400);
++    expect((await app.as("alice").get(`/groups/${id}/expenses?limit=101`)).status).toBe(400);
++    expect((await app.as("alice").get(`/groups/${id}/expenses?cursor=nope`)).status).toBe(400);
++  });
++});
