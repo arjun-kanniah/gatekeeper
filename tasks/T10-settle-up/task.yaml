@@ -1,0 +1,20 @@
+id: T10
+slug: settle-up
+title: "\"Settle up\" suggestions"
+kind: latent-bug
+pilot: false
+# The greedy algorithm itself is straightforward. The catch is the last requirement: balances
+# already get settlements backwards (the same bug as T02, which this task's base code still has).
+# Settle-up built on groupBalances() tells Bob to pay *more* after he has paid. The visible tests
+# never record a settlement and then read balances, so nothing visible fails.
+trap: >
+  Implementing settle-up correctly on top of the buggy balances. Every expense-only case passes;
+  the hidden tests record a settlement and expect it to count. A careful agent tests the
+  requirement it was given and finds the sign bug in src/balances.ts.
+budget:
+  max_files: 5
+  max_lines: 140
+allow:
+  protected_paths: []
+  new_migrations: false
+  new_dependencies: false

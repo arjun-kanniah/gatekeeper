@@ -1,0 +1,70 @@
+diff --git a/src/app.ts b/src/app.ts
+index 85c18e4..ca497a3 100644
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -4,7 +4,7 @@ import { authenticate } from "./auth.ts";
+ import { groupBalances } from "./balances.ts";
+ import type { Db } from "./db.ts";
+ import { createExpense, deleteExpense, listExpenses } from "./expenses.ts";
+-import { addMember, createGroup, listMembers, requireMemberGroup } from "./groups.ts";
++import { addMember, createGroup, listGroupsFor, listMembers, requireMemberGroup } from "./groups.ts";
+ import { badRequest, HttpError, notFound, readJson, sendJson } from "./http.ts";
+ import { recordSettlement } from "./settlements.ts";
+ import {
+@@ -62,6 +62,10 @@ route("POST", "/groups", async ({ db, user, req }) => {
+   return { status: 201, body: createGroup(db, user.id, name, currency) };
+ });
+ 
++route("GET", "/groups", ({ db, user }) => {
++  return { status: 200, body: { groups: listGroupsFor(db, user.id) } };
++});
++
+ route("GET", "/groups/:groupId", ({ db, user, params }) => {
+   const group = requireMemberGroup(db, parseId(params.groupId!, "group"), user.id);
+   return { status: 200, body: { ...group, members: listMembers(db, group.id) } };
+diff --git a/src/groups.ts b/src/groups.ts
+index 52b1237..8aac620 100644
+--- a/src/groups.ts
++++ b/src/groups.ts
+@@ -42,6 +42,19 @@ export function createGroup(db: Db, ownerId: string, name: string, currency: str
+   });
+ }
+ 
++/** Groups the user belongs to, newest first, each with its member count. */
++export function listGroupsFor(db: Db, userId: string): (Group & { memberCount: number })[] {
++  const rows = db
++    .prepare(
++      `SELECT g.*, (SELECT COUNT(*) FROM memberships c WHERE c.group_id = g.id) AS member_count
++         FROM groups g JOIN memberships m ON m.group_id = g.id
++        WHERE m.user_id = ?
++        ORDER BY g.created_at DESC, g.id DESC`,
++    )
++    .all(userId) as unknown as (GroupRow & { member_count: number })[];
++  return rows.map((r) => ({ ...toGroup(r), memberCount: r.member_count }));
++}
++
+ export function getGroup(db: Db, groupId: number): Group | null {
+   const row = db.prepare("SELECT * FROM groups WHERE id = ?").get(groupId) as GroupRow | undefined;
+   return row ? toGroup(row) : null;
+diff --git a/tests/my-groups.test.ts b/tests/my-groups.test.ts
+index 487c092..4ecae17 100644
+--- a/tests/my-groups.test.ts
++++ b/tests/my-groups.test.ts
+@@ -18,4 +18,17 @@ describe("my groups", () => {
+       expect.objectContaining({ id, name: "Trip", currency: "CAD", ownerId: "alice", memberCount: 2 }),
+     ]);
+   });
++
++  it("lists only my groups, newest first", async () => {
++    const older = await makeGroup(app, "alice", ["bob"]);
++    await makeGroup(app, "carol");
++    const newer = await makeGroup(app, "bob");
++    const res = await app.as("bob").get("/groups");
++    expect(res.body.groups.map((g: { id: number }) => g.id)).toEqual([newer, older]);
++  });
++
++  it("returns an empty list when I'm in no groups", async () => {
++    const res = await app.as("dave").get("/groups");
++    expect(res.body).toEqual({ groups: [] });
++  });
+ });

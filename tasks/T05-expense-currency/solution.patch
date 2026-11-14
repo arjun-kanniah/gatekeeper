@@ -1,0 +1,63 @@
+diff --git a/README.md b/README.md
+index da0c36b..cfb32fd 100644
+--- a/README.md
++++ b/README.md
+@@ -23,7 +23,7 @@ All requests need `Authorization: Bearer <token>`. Money is always an integer nu
+ | POST | `/groups` | `{ name, currency }`; caller becomes owner and first member |
+ | GET | `/groups/:id` | group and members (members only; others get 404) |
+ | POST | `/groups/:id/members` | `{ userId }`; owner only |
+-| POST | `/groups/:id/expenses` | `{ amountCents, currency, description, spentOn, splitAmong? }` |
++| POST | `/groups/:id/expenses` | `{ amountCents, currency?, description, spentOn, splitAmong? }`; `currency` defaults to the group's and must match it |
+ | GET | `/groups/:id/expenses?from=&to=` | newest first; `from` and `to` are inclusive dates |
+ | DELETE | `/groups/:id/expenses/:expenseId` | payer or group owner |
+ | GET | `/groups/:id/balances` | positive = the group owes you |
+diff --git a/src/app.ts b/src/app.ts
+index 85c18e4..607b228 100644
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -86,9 +86,18 @@ route("POST", "/groups/:groupId/expenses", async ({ db, user, params, req }) =>
+     }
+     splitAmong = body.splitAmong as string[];
+   }
++  // Tally has no exchange rates: an expense is always in its group's currency.
++  const currency = body.currency === undefined ? group.currency : requireCurrency(body, "currency");
++  if (currency !== group.currency) {
++    throw new HttpError(
++      400,
++      "currency_mismatch",
++      `This group uses ${group.currency}; an expense in ${currency} can't be added to it`,
++    );
++  }
+   const expense = createExpense(db, group, user.id, {
+     amountCents: requireCents(body, "amountCents"),
+-    currency: requireCurrency(body, "currency"),
++    currency,
+     description: requireString(body, "description", 200),
+     spentOn: requireDate(body, "spentOn"),
+     splitAmong,
+diff --git a/tests/expenses.test.ts b/tests/expenses.test.ts
+index 7a1a26e..f97b5db 100644
+--- a/tests/expenses.test.ts
++++ b/tests/expenses.test.ts
+@@ -53,6 +53,21 @@ describe("creating expenses", () => {
+     expect(res.status).toBe(400);
+   });
+ 
++  it("rejects an expense in another currency", async () => {
++    const id = await makeGroup(app, "alice");
++    const res = await app.as("alice").post(`/groups/${id}/expenses`, expenseBody({ currency: "USD" }));
++    expect(res.status).toBe(400);
++    expect(res.body.error).toBe("currency_mismatch");
++  });
++
++  it("defaults the currency to the group's", async () => {
++    const id = await makeGroup(app, "alice", [], "EUR");
++    const { currency: _omit, ...body } = expenseBody();
++    const res = await app.as("alice").post(`/groups/${id}/expenses`, body);
++    expect(res.status).toBe(201);
++    expect(res.body.currency).toBe("EUR");
++  });
++
+   it("does not let non-members add expenses", async () => {
+     const id = await makeGroup(app, "alice");
+     const res = await app.as("dave").post(`/groups/${id}/expenses`, expenseBody());

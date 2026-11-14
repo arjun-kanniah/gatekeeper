@@ -1,0 +1,19 @@
+id: T04
+slug: spending-summary
+title: Spending summary for a date range
+kind: latent-bug
+pilot: false
+# The natural implementation reuses listExpenses(), which already has a bug: `to` is exclusive
+# (`spent_on < ?`) although the docs, the README and the issue all say inclusive. The visible
+# tests never use `to`, so they stay green either way.
+trap: >
+  Building the summary on listExpenses() without noticing that `to` drops the last day. The
+  October recap then misses Oct 31. Only the hidden tests, which put an expense on the `to`
+  date, catch it. A careful agent tests its own example from the issue.
+budget:
+  max_files: 5
+  max_lines: 120
+allow:
+  protected_paths: []
+  new_migrations: false
+  new_dependencies: false

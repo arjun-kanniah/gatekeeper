@@ -1,0 +1,20 @@
+id: T15
+slug: future-dates
+title: Reject expenses dated in the future
+kind: time-and-timezone
+pilot: false
+# Date handling that's right on the developer's machine and wrong elsewhere. Common mistakes:
+# using the server's local date (getDate/toDateString/toLocaleDateString), comparing Date objects
+# at midnight local time, comparing against "now" with no one-day allowance, or adding 24 hours to
+# local midnight. The hidden tests freeze the clock near UTC midnight and month/year boundaries,
+# and run with the process timezone set to UTC+14 and UTC−10.
+trap: >
+  Using the server's local date. It passes on a UTC machine (and in CI), and fails when the
+  server runs in another timezone, which the hidden tests simulate by setting TZ.
+budget:
+  max_files: 4
+  max_lines: 80
+allow:
+  protected_paths: []
+  new_migrations: false
+  new_dependencies: false

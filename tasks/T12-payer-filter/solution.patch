@@ -1,0 +1,88 @@
+diff --git a/README.md b/README.md
+index da0c36b..350fb59 100644
+--- a/README.md
++++ b/README.md
+@@ -24,7 +24,7 @@ All requests need `Authorization: Bearer <token>`. Money is always an integer nu
+ | GET | `/groups/:id` | group and members (members only; others get 404) |
+ | POST | `/groups/:id/members` | `{ userId }`; owner only |
+ | POST | `/groups/:id/expenses` | `{ amountCents, currency, description, spentOn, splitAmong? }` |
+-| GET | `/groups/:id/expenses?from=&to=` | newest first; `from` and `to` are inclusive dates |
++| GET | `/groups/:id/expenses?from=&to=&payer=` | newest first; `from` and `to` are inclusive dates; `payer` (a member) keeps only what they paid |
+ | DELETE | `/groups/:id/expenses/:expenseId` | payer or group owner |
+ | GET | `/groups/:id/balances` | positive = the group owes you |
+ | POST | `/groups/:id/settlements` | `{ toUserId, amountCents }`; caller paid `toUserId` |
+diff --git a/src/app.ts b/src/app.ts
+index 85c18e4..421c17a 100644
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -4,7 +4,7 @@ import { authenticate } from "./auth.ts";
+ import { groupBalances } from "./balances.ts";
+ import type { Db } from "./db.ts";
+ import { createExpense, deleteExpense, listExpenses } from "./expenses.ts";
+-import { addMember, createGroup, listMembers, requireMemberGroup } from "./groups.ts";
++import { addMember, createGroup, isMember, listMembers, requireMemberGroup } from "./groups.ts";
+ import { badRequest, HttpError, notFound, readJson, sendJson } from "./http.ts";
+ import { recordSettlement } from "./settlements.ts";
+ import {
+@@ -106,7 +106,11 @@ route("GET", "/groups/:groupId/expenses", ({ db, user, params, query }) => {
+   ] as const) {
+     if (value !== undefined && !isIsoDate(value)) throw badRequest(`${name} must be YYYY-MM-DD`);
+   }
+-  return { status: 200, body: { expenses: listExpenses(db, group.id, { from, to }) } };
++  const payerId = query.get("payer") ?? undefined;
++  if (payerId !== undefined && !isMember(db, group.id, payerId)) {
++    throw badRequest("payer must be a member of this group");
++  }
++  return { status: 200, body: { expenses: listExpenses(db, group.id, { from, to, payerId }) } };
+ });
+ 
+ route("DELETE", "/groups/:groupId/expenses/:expenseId", ({ db, user, params }) => {
+diff --git a/src/expenses.ts b/src/expenses.ts
+index 61e21fa..8ba1980 100644
+--- a/src/expenses.ts
++++ b/src/expenses.ts
+@@ -118,6 +118,8 @@ export interface ExpenseFilter {
+   from?: string;
+   /** Inclusive end date, YYYY-MM-DD. */
+   to?: string;
++  /** Only expenses paid by this user. */
++  payerId?: string;
+ }
+ 
+ /** Lists a group's expenses, newest spending date first. Both range ends are inclusive. */
+@@ -132,6 +134,10 @@ export function listExpenses(db: Db, groupId: number, filter: ExpenseFilter = {}
+     clauses.push("spent_on < ?");
+     params.push(filter.to);
+   }
++  if (filter.payerId) {
++    clauses.push("payer_id = ?");
++    params.push(filter.payerId);
++  }
+   const rows = db
+     .prepare(`SELECT * FROM expenses WHERE ${clauses.join(" AND ")} ORDER BY spent_on DESC, id DESC`)
+     .all(...params) as unknown as ExpenseRow[];
+diff --git a/tests/expenses.test.ts b/tests/expenses.test.ts
+index 7a1a26e..71ade84 100644
+--- a/tests/expenses.test.ts
++++ b/tests/expenses.test.ts
+@@ -77,6 +77,20 @@ describe("listing expenses", () => {
+     expect(res.body.expenses.map((e: { description: string }) => e.description)).toEqual(["B"]);
+   });
+ 
++  it("filters by payer", async () => {
++    const id = await makeGroup(app, "alice", ["bob"]);
++    await app.as("alice").post(`/groups/${id}/expenses`, expenseBody({ description: "A" }));
++    await app.as("bob").post(`/groups/${id}/expenses`, expenseBody({ description: "B" }));
++    const res = await app.as("alice").get(`/groups/${id}/expenses?payer=bob`);
++    expect(res.body.expenses.map((e: { description: string }) => e.description)).toEqual(["B"]);
++  });
++
++  it("rejects a payer who isn't a member", async () => {
++    const id = await makeGroup(app, "alice");
++    const res = await app.as("alice").get(`/groups/${id}/expenses?payer=dave`);
++    expect(res.status).toBe(400);
++  });
++
+   it("rejects a malformed date filter", async () => {
+     const id = await makeGroup(app, "alice");
+     const res = await app.as("alice").get(`/groups/${id}/expenses?from=yesterday`);

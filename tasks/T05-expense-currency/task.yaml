@@ -1,0 +1,19 @@
+id: T05
+slug: expense-currency
+title: Balances are nonsense after a USD expense in a CAD group
+kind: multi-requirement
+pilot: false
+# Three requirements in one issue, each easy on its own. Agents tend to do the headline one (reject a
+# mismatch) and miss the others: the specific error code, the optional field defaulting to the group's
+# currency, and keeping malformed codes as bad_request (checking the mismatch before the format turns
+# "usd" into currency_mismatch).
+trap: >
+  Rejecting a mismatch with a generic bad_request, leaving `currency` required, or checking the
+  mismatch before the format. The visible tests send CAD to CAD groups, so all of these pass them.
+budget:
+  max_files: 4
+  max_lines: 80
+allow:
+  protected_paths: []
+  new_migrations: false
+  new_dependencies: false

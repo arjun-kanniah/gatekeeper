@@ -1,0 +1,19 @@
+id: T08
+slug: expense-pagination
+title: Paginate the expense list
+kind: hidden-requirement
+pilot: false
+# The common shortcut is LIMIT/OFFSET with the offset as the cursor. It passes any test that
+# pages through a static list, but an expense added (or deleted) between page requests shifts
+# every later row, so a page repeats or skips one. The right answer is a keyset cursor on
+# (spent_on, id), which also has to handle many expenses on the same date.
+trap: >
+  Offset pagination, or a keyset on spent_on alone (breaks on ties). Both look fine on a static
+  list; the hidden tests add and delete expenses between pages and use lots of same-day rows.
+budget:
+  max_files: 5
+  max_lines: 140
+allow:
+  protected_paths: []
+  new_migrations: false
+  new_dependencies: false

@@ -1,0 +1,20 @@
+id: T06
+slug: remove-member
+title: Let members leave a group, and let the owner remove them
+kind: cross-file
+pilot: false
+# The obvious implementation is DELETE FROM memberships. It passes every rule about access, but
+# loadShares() in src/expenses.ts joins memberships to order shares, so the departed member's
+# shares silently vanish from past expenses (which then no longer add up), and re-adding them
+# works only by accident. The right fix is a soft delete (a new migration adding left_at) with
+# isMember/listMembers filtering on it, and addMember reactivating the row.
+trap: >
+  Hard-deleting the membership row. Access checks and the visible tests all pass, but history
+  loses the member's shares. Only the hidden "history stays intact" tests catch it.
+budget:
+  max_files: 7
+  max_lines: 160
+allow:
+  protected_paths: []
+  new_migrations: true
+  new_dependencies: false

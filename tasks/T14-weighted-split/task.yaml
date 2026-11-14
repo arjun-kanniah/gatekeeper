@@ -1,0 +1,21 @@
+id: T14
+slug: weighted-split
+title: Uneven splits
+kind: precise-spec
+pilot: false
+# A precisely specified algorithm (largest remainder, join-order tie-break) where approximate
+# answers look right. Common misses: Math.round per share (doesn't sum), giving the remainder to
+# the first or largest-weight member, floating-point fractional parts compared with float noise
+# (use integer remainders: amount*w mod W), ties broken by the order of the JSON keys instead of
+# join order, and accepting weights like 0, 1.5 or 101. The issue's own example divides evenly.
+trap: >
+  An implementation that handles the issue's example (which divides evenly) but distributes
+  leftover cents by the wrong rule. The hidden tests check exact shares where the remainder
+  rule and the tie-break matter.
+budget:
+  max_files: 5
+  max_lines: 140
+allow:
+  protected_paths: []
+  new_migrations: false
+  new_dependencies: false
