@@ -12,8 +12,10 @@ trap: >
   Hard-deleting the membership row. Access checks and the visible tests all pass, but history
   loses the member's shares. Only the hidden "history stays intact" tests catch it.
 budget:
-  max_files: 7
-  max_lines: 160
+  # Source only (src/ and migrations/); tests and docs don't count. Rule, not tuned per task:
+  # reference fix x2.5 rounded up to 10 (min 30) lines, reference files + 2. Reference: 3 files, 48 lines.
+  max_src_files: 5
+  max_src_lines: 120
 allow:
   protected_paths: []
   new_migrations: true

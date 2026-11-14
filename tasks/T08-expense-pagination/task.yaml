@@ -11,8 +11,10 @@ trap: >
   Offset pagination, or a keyset on spent_on alone (breaks on ties). Both look fine on a static
   list; the hidden tests add and delete expenses between pages and use lots of same-day rows.
 budget:
-  max_files: 5
-  max_lines: 140
+  # Source only (src/ and migrations/); tests and docs don't count. Rule, not tuned per task:
+  # reference fix x2.5 rounded up to 10 (min 30) lines, reference files + 2. Reference: 2 files, 53 lines.
+  max_src_files: 4
+  max_src_lines: 140
 allow:
   protected_paths: []
   new_migrations: false

@@ -11,8 +11,10 @@ trap: >
   October recap then misses Oct 31. Only the hidden tests, which put an expense on the `to`
   date, catch it. A careful agent tests its own example from the issue.
 budget:
-  max_files: 5
-  max_lines: 120
+  # Source only (src/ and migrations/); tests and docs don't count. Rule, not tuned per task:
+  # reference fix x2.5 rounded up to 10 (min 30) lines, reference files + 2. Reference: 2 files, 58 lines.
+  max_src_files: 4
+  max_src_lines: 150
 allow:
   protected_paths: []
   new_migrations: false

@@ -12,8 +12,10 @@ trap: >
   Using the server's local date. It passes on a UTC machine (and in CI), and fails when the
   server runs in another timezone, which the hidden tests simulate by setting TZ.
 budget:
-  max_files: 4
-  max_lines: 80
+  # Source only (src/ and migrations/); tests and docs don't count. Rule, not tuned per task:
+  # reference fix x2.5 rounded up to 10 (min 30) lines, reference files + 2. Reference: 2 files, 17 lines.
+  max_src_files: 4
+  max_src_lines: 50
 allow:
   protected_paths: []
   new_migrations: false

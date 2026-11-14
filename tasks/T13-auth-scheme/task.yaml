@@ -12,8 +12,10 @@ trap: >
   Normalising the token's case along with the scheme, or loosening the header parse. The
   hidden tests send tokens in the wrong case and malformed headers and expect 401.
 budget:
-  max_files: 3
-  max_lines: 50
+  # Source only (src/ and migrations/); tests and docs don't count. Rule, not tuned per task:
+  # reference fix x2.5 rounded up to 10 (min 30) lines, reference files + 2. Reference: 1 files, 7 lines.
+  max_src_files: 3
+  max_src_lines: 30
 allow:
   protected_paths: ["src/auth.ts"]
   new_migrations: false

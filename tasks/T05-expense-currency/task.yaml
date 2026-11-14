@@ -11,8 +11,10 @@ trap: >
   Rejecting a mismatch with a generic bad_request, leaving `currency` required, or checking the
   mismatch before the format. The visible tests send CAD to CAD groups, so all of these pass them.
 budget:
-  max_files: 4
-  max_lines: 80
+  # Source only (src/ and migrations/); tests and docs don't count. Rule, not tuned per task:
+  # reference fix x2.5 rounded up to 10 (min 30) lines, reference files + 2. Reference: 1 files, 11 lines.
+  max_src_files: 3
+  max_src_lines: 30
 allow:
   protected_paths: []
   new_migrations: false
