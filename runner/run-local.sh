@@ -50,6 +50,8 @@ rm -rf "$work/coverage"
 
 prompt="You are working in the Tally repository (the current directory). Resolve the GitHub issue below. Make the change, run the tests, and finish with a short summary of what you changed and anything you are unsure about.
 
+Edit files with the Edit and Write tools. Bash is limited to running the tests and the type checker, git status/diff/log, and ls; any other shell command, including redirects and scripts that write files, is denied.
+
 <issue>
 $(cat "$tdir/issue.md")
 </issue>"

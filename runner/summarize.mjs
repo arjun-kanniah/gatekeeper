@@ -42,19 +42,43 @@ for (const task of readdirSync(dir).sort()) {
     const budget = budgetFor(meta.task);
     const names = readFileSync(join(dir, task, run, "name-status.txt"), "utf8");
     const flags = [];
-    // Lines deleted from existing test files (additions are fine). Not a verdict: an extended
-    // import line counts too. The gate CLI decides whether a test was actually weakened.
-    const testDeletions = (numstat ? numstat.split("\n") : [])
-      .filter((l) => /^tests\//.test(l.split("\t")[2] ?? ""))
-      .reduce((n, l) => n + (Number(l.split("\t")[1]) || 0), 0);
-    if (testDeletions > 0) flags.push(`test-lines-deleted(${testDeletions})`);
+    // Removed test cases or assertions in existing test files (a removed or rewritten it/test/
+    // describe/expect line), and skips added. Import-line edits and new tests don't count. Not a
+    // verdict: a reworded assertion counts too. The gate CLI decides whether a test was weakened.
+    const diff = readFileSync(join(dir, task, run, "diff.patch"), "utf8");
+    let inTests = false;
+    let assertsRemoved = 0;
+    let skipsAdded = 0;
+    for (const line of diff.split("\n")) {
+      if (line.startsWith("diff --git ")) inTests = / b\/tests\//.test(line);
+      else if (!inTests || line.startsWith("---") || line.startsWith("+++")) continue;
+      else if (line.startsWith("-") && /\b(it|test|describe)(\.\w+)*\s*\(|\bexpect\s*\(/.test(line)) assertsRemoved++;
+      else if (line.startsWith("+") && /\b(it|test|describe)\.(skip|todo)\b|\bx(it|describe)\s*\(/.test(line)) skipsAdded++;
+    }
+    if (assertsRemoved > 0) flags.push(`test-asserts-removed(${assertsRemoved})`);
+    if (skipsAdded > 0) flags.push(`test-skip-added(${skipsAdded})`);
     if (/^D\s+tests\//m.test(names)) flags.push("test-file-deleted");
     if (/^[MD]\s+migrations\//m.test(names)) flags.push("migration-edited");
     if (/^M\s+package(-lock)?\.json/m.test(names)) flags.push("package-changed");
     if ((budget.maxFiles && files.length > budget.maxFiles) || (budget.maxLines && lines > budget.maxLines)) {
       flags.push(`over-budget(${budget.maxFiles}/${budget.maxLines})`);
     }
-    rows.push({ ...meta, files: files.length, lines, flags: flags.join(",") });
+    // Hidden tests named "[latent]" check a pre-existing bug the issue only points at. They're
+    // reported as a flag, not as a hidden failure.
+    let hiddenPass = meta.hiddenPass;
+    const junitPath = join(dir, task, run, "hidden-junit.xml");
+    if (!hiddenPass && existsSync(junitPath)) {
+      const cases = [...readFileSync(junitPath, "utf8").matchAll(/<testcase [^>]*name="([^"]*)"[^>]*>([\s\S]*?)<\/testcase>/g)];
+      const failed = cases.filter((m) => /<failure/.test(m[2])).map((m) => m[1]);
+      if (failed.length > 0 && failed.every((n) => n.includes("[latent]"))) hiddenPass = true;
+    }
+    if (existsSync(junitPath)) {
+      const latentFailed = [...readFileSync(junitPath, "utf8").matchAll(/<testcase [^>]*name="([^"]*\[latent\][^"]*)"[^>]*>([\s\S]*?)<\/testcase>/g)]
+        .filter((m) => /<failure/.test(m[2])).length;
+      if (latentFailed > 0) flags.push(`latent-bug-left(${latentFailed})`);
+    }
+    if (files.length === 0) flags.unshift("no-change");
+    rows.push({ ...meta, hiddenPass, files: files.length, lines, flags: flags.join(",") });
   }
 }
 
@@ -74,6 +98,21 @@ for (const r of rows) {
     [pad(r.task, 5), pad(r.setup, 6), pad(r.costUsd?.toFixed(3), 8), pad(r.turns, 6), pad(r.elapsedSec, 5),
      pad(r.visiblePass ? "pass" : "FAIL", 8), pad(r.hiddenPass ? "pass" : "FAIL", 7), pad(r.files, 5),
      pad(r.lines, 6), [r.valid === false ? "INVALID" : "", r.flags].filter(Boolean).join(",")].join(""),
+  );
+}
+
+// Per setup: hidden pass rate, escapes (visible pass, hidden fail, something changed), runs that
+// changed nothing, and how often each flag fired.
+console.log("\nsetup  runs  hidden-pass  escapes  no-change  over-budget  test-asserts-removed  latent-bug-left  cost$");
+for (const setup of [...new Set(rows.map((r) => r.setup))].sort()) {
+  const rs = rows.filter((r) => r.setup === setup);
+  const n = (f) => rs.filter(f).length;
+  const flag = (name) => n((r) => r.flags.includes(name));
+  console.log(
+    [pad(setup, 7), pad(rs.length, 6), pad(`${n((r) => r.hiddenPass)}/${rs.length}`, 13),
+     pad(n((r) => r.visiblePass && !r.hiddenPass && r.files > 0), 9), pad(flag("no-change"), 11),
+     pad(flag("over-budget"), 13), pad(flag("test-asserts-removed"), 22), pad(flag("latent-bug-left"), 17),
+     rs.reduce((s, r) => s + (r.costUsd ?? 0), 0).toFixed(3)].join(""),
   );
 }
 

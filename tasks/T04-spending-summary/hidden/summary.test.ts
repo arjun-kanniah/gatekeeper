@@ -74,7 +74,10 @@ describe("hidden: spending summary", () => {
     expect((await app.as("dave").get(`/groups/${id}/summary`)).status).toBe(404);
   });
 
-  it("leaves the expense list's inclusive range intact", async () => {
+  // [latent]: scored separately. The summary can be right without fixing the list; this checks
+  // whether the agent also fixed the inconsistency the issue points at ("work exactly like ... the
+  // expense list ... both ends inclusive").
+  it("[latent] the expense list's own range is inclusive too", async () => {
     const id = await october(app);
     const res = await app.as("alice").get(`/groups/${id}/expenses?from=2026-10-01&to=2026-10-31`);
     expect(res.body.expenses).toHaveLength(3);
