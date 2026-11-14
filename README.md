@@ -42,6 +42,12 @@ runner/pilot.sh                   # the pilot: 3 tasks x 3 setups
 node runner/summarize.mjs runs/<batch>
 ```
 
+After the agent finishes, each run collects its diff, the visible test results, coverage and a
+Semgrep scan. Then `gatekeeper check` decides, writing `gates.json` and `gates.txt` and putting
+its verdict in `meta.json` (`gatesPass`, `gatesFailed`). Only after that are the hidden tests
+restored and run, so the gates never see the truth. A run that passes every gate and fails the
+hidden tests prints `ESCAPED`.
+
 Runs use `claude -p --bare`, so the agent authenticates only with the API key in `.env` and loads
 no personal settings or memory. Its tools are limited to reading and editing files in the copy
 and running the test, type-check and read-only git commands.

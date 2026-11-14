@@ -89,28 +89,34 @@ if (totalOnly) {
 }
 
 const pad = (v, n) => String(v ?? "-").padEnd(n);
+// meta.json has the gate verdict for runs collected since run-local.sh called the gates; older
+// runs show "-" (bin/gatekeeper eval scores those from their artifacts).
+const gateVerdict = (r) => (r.gatesPass == null ? "-" : r.gatesPass ? "pass" : "FAIL");
 console.log(
   [pad("task", 5), pad("setup", 6), pad("cost$", 8), pad("turns", 6), pad("sec", 5), pad("visible", 8),
-   pad("hidden", 7), pad("srcF", 5), pad("srcL", 6), "flags"].join(""),
+   pad("gates", 6), pad("hidden", 7), pad("srcF", 5), pad("srcL", 6), "flags"].join(""),
 );
 for (const r of rows) {
   console.log(
     [pad(r.task, 5), pad(r.setup, 6), pad(r.costUsd?.toFixed(3), 8), pad(r.turns, 6), pad(r.elapsedSec, 5),
-     pad(r.visiblePass ? "pass" : "FAIL", 8), pad(r.hiddenPass ? "pass" : "FAIL", 7), pad(r.files, 5),
+     pad(r.visiblePass ? "pass" : "FAIL", 8), pad(gateVerdict(r), 6), pad(r.hiddenPass ? "pass" : "FAIL", 7), pad(r.files, 5),
      pad(r.lines, 6), [r.valid === false ? "INVALID" : "", r.flags].filter(Boolean).join(",")].join(""),
   );
 }
 
 // Per setup: hidden pass rate, escapes (visible pass, hidden fail, something changed), runs that
 // changed nothing, and how often each flag fired.
-console.log("\nsetup  runs  hidden-pass  escapes  no-change  over-budget  test-asserts-removed  latent-bug-left  cost$");
+// past-gates: escapes that also passed every gate (only for runs that have a gate verdict).
+console.log("\nsetup  runs  hidden-pass  escapes  past-gates  no-change  over-budget  test-asserts-removed  latent-bug-left  cost$");
 for (const setup of [...new Set(rows.map((r) => r.setup))].sort()) {
   const rs = rows.filter((r) => r.setup === setup);
   const n = (f) => rs.filter(f).length;
   const flag = (name) => n((r) => r.flags.includes(name));
   console.log(
     [pad(setup, 7), pad(rs.length, 6), pad(`${n((r) => r.hiddenPass)}/${rs.length}`, 13),
-     pad(n((r) => r.visiblePass && !r.hiddenPass && r.files > 0), 9), pad(flag("no-change"), 11),
+     pad(n((r) => r.visiblePass && !r.hiddenPass && r.files > 0), 9),
+     pad(rs.some((r) => r.gatesPass != null) ? n((r) => r.gatesPass === true && !r.hiddenPass) : "-", 12),
+     pad(flag("no-change"), 11),
      pad(flag("over-budget"), 13), pad(flag("test-asserts-removed"), 22), pad(flag("latent-bug-left"), 17),
      rs.reduce((s, r) => s + (r.costUsd ?? 0), 0).toFixed(3)].join(""),
   );

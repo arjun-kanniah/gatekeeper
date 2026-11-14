@@ -36,6 +36,7 @@ if [[ -e "$out/meta.json" && "${FORCE:-0}" != 1 ]]; then
   echo "skip: $out already has results (FORCE=1 to redo)"; exit 0
 fi
 mkdir -p "$out"
+build_gatekeeper
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/gk-run-XXXXXX")"
 cleanup() { if [[ "${KEEP_WORK:-0}" != 1 ]]; then rm -rf "${work:?}"; else echo "kept workdir: $work"; fi; }
@@ -90,9 +91,10 @@ agent_exit=$?
 set -e
 elapsed=$(( $(date +%s) - start ))
 
-# ---- The change, the visible checks, and the truth (the hidden tests) -------
+# ---- The change, the visible checks, the gates, then the truth (the hidden tests) ----
 collect_change "$work" "$out"
 check_change "$work" "$out"
+run_gates "$tdir" "$out"
 run_hidden "$tdir" "$work" "$out"
 
 # ---- meta.json ---------------------------------------------------------------
@@ -101,6 +103,9 @@ const fs = require("node:fs");
 const out = process.argv[2];
 let agent = {};
 try { agent = JSON.parse(fs.readFileSync(out + "/agent.json", "utf8")); } catch {}
+let gates = null;
+try { gates = JSON.parse(fs.readFileSync(out + "/gates.json", "utf8")); } catch {}
+const gatesExit = $gates_exit;
 const meta = {
   task: "$task", setup: "$setup", run: $run, model: "$model",
   claudeMd: $with_claude_md === 1, budgetUsd: $budget,
@@ -112,10 +117,16 @@ const meta = {
   valid: agent.terminal_reason !== "api_error" && $agent_exit !== 124,
   visiblePass: $visible_exit === 0, typecheckPass: $typecheck_exit === 0,
   hiddenPass: $hidden_exit === 0,
+  // The gate verdict, decided before the hidden tests ran. null when the gates couldn't run.
+  gatesPass: gatesExit <= 1 ? gatesExit === 0 : null,
+  gatesFailed: gates ? gates.gates.filter((g) => g.verdict === "fail").map((g) => g.gate) : null,
+  gatesSkipped: gates ? gates.gates.filter((g) => g.verdict === "skip").map((g) => g.gate) : null,
   finishedAt: new Date().toISOString(),
 };
 fs.writeFileSync(out + "/meta.json", JSON.stringify(meta, null, 2) + "\n");
 console.log(JSON.stringify({ task: meta.task, setup: meta.setup, cost: meta.costUsd, turns: meta.turns,
-  visible: meta.visiblePass, hidden: meta.hiddenPass, sec: meta.elapsedSec, valid: meta.valid }));
+  visible: meta.visiblePass, gates: meta.gatesPass ? "pass" : meta.gatesFailed ?? "error",
+  hidden: meta.hiddenPass, sec: meta.elapsedSec, valid: meta.valid }));
+if (meta.gatesPass && !meta.hiddenPass) console.error("ESCAPED: every gate passed and the hidden tests failed");
 if (!meta.valid) console.error("INVALID RUN (" + meta.terminalReason + ", exit " + meta.agentExit + "): rerun with FORCE=1");
 JS

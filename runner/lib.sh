@@ -121,3 +121,25 @@ run_hidden() {
   hidden_exit=$?
   set -e
 }
+
+# ---- The gates ---------------------------------------------------------------------------------
+
+# build_gatekeeper: builds bin/gatekeeper. Go caches the build, so this is quick when nothing
+# changed. Called before any agent runs, so a broken build costs nothing.
+build_gatekeeper() {
+  (cd "$ROOT" && go build -o bin/gatekeeper ./cmd/gatekeeper)
+}
+
+# run_gates <task_dir> <out>: applies the gates to the artifacts in <out> and writes gates.json
+# and gates.txt. Run it before run_hidden: the gates decide without the truth. Sets gates_exit
+# (0 every gate passed, 1 a gate failed, 2 the gates couldn't run: see gates.err).
+run_gates() {
+  local tdir="$1" out="$2" gk=("$ROOT/bin/gatekeeper" check --run "$2" --task "$1/task.yaml" --config "$ROOT/gates.yaml")
+  set +e
+  "${gk[@]}" --format json > "$out/gates.json" 2> "$out/gates.err"
+  gates_exit=$?
+  "${gk[@]}" --format text > "$out/gates.txt" 2>&1
+  set -e
+  [[ -s "$out/gates.err" ]] || rm -f "$out/gates.err"
+  if [[ $gates_exit -ge 2 ]]; then echo "gatekeeper failed (exit $gates_exit): see $out/gates.err" >&2; fi
+}

@@ -23,7 +23,7 @@ batch="${BATCH:-traps-$(date +%Y%m%d)}"
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/gk-traps-XXXXXX")"
 trap 'rm -rf "${scratch:?}"' EXIT
 
-(cd "$ROOT" && go build -o bin/gatekeeper ./cmd/gatekeeper)
+build_gatekeeper
 
 for t in "${tasks[@]}"; do
   tdir="$(task_dir "$t")"
@@ -38,6 +38,7 @@ for t in "${tasks[@]}"; do
     (cd "$work" && git apply --whitespace=nowarn "$patch")
     collect_change "$work" "$out"
     check_change "$work" "$out"
+    run_gates "$tdir" "$out"
     run_hidden "$tdir" "$work" "$out"
     node - "$out" "$t" "$name" "$patch" "$visible_exit" "$typecheck_exit" "$hidden_exit" <<'JS'
 const fs = require("node:fs");
@@ -69,9 +70,6 @@ echo
 status=0
 for meta in "$ROOT/runs/$batch"/*/*/meta.json; do
   dir="$(dirname "$meta")"
-  set +e
-  "$ROOT/bin/gatekeeper" check --run "$dir" --format json > "$dir/gates.json"
-  set -e
   node - "$dir" <<'JS' || status=1
 const fs = require("node:fs");
 const dir = process.argv[2];
