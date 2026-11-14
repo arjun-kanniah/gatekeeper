@@ -1,0 +1,1 @@
+<testsuites><testsuite name="tests/hidden/auth.test.ts"><testcase name="hidden: lowercase scheme"></testcase><testcase name="[latent] something older"><failure message="x"/></testcase></testsuite></testsuites>

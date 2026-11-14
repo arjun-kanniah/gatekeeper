@@ -1,0 +1,14 @@
+diff --git a/src/auth.ts b/src/auth.ts
+index 1111111..2222222 100644
+--- a/src/auth.ts
++++ b/src/auth.ts
+@@ -1 +1 @@
+-const m = header.match(/^Bearer (\S+)$/);
++const m = header.trim().match(/^bearer +(\S+)$/i);
+diff --git a/tests/helpers.ts b/tests/helpers.ts
+index 3333333..4444444 100644
+--- a/tests/helpers.ts
++++ b/tests/helpers.ts
+@@ -1 +1,2 @@
+ export const x = 1;
++export const y = 2;

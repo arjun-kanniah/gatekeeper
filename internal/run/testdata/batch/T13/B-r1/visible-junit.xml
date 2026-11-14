@@ -1,0 +1,1 @@
+<testsuites><testsuite name="tests/auth.test.ts"><testcase classname="tests/auth.test.ts" name="auth &gt; accepts a token"></testcase></testsuite></testsuites>

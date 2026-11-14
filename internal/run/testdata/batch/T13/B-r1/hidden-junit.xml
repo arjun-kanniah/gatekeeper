@@ -1,0 +1,1 @@
+<testsuites><testsuite name="tests/hidden/auth.test.ts"><testcase name="hidden: lowercase scheme"></testcase><testcase name="hidden: wrong-case token is rejected"><failure message="expected 401"/></testcase></testsuite></testsuites>

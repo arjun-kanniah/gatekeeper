@@ -1,0 +1,4 @@
+source: ["src/**"]
+tests: ["tests/**"]
+protected: ["src/auth.ts", "tests/helpers.ts"]
+migrations: migrations/

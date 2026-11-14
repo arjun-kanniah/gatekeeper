@@ -1,0 +1,32 @@
+# Gatekeeper policy for Tally. Paths are relative to the root of the repo the diff comes from.
+# Per-task budgets and allowances live in tasks/<id>-*/task.yaml.
+
+# What the diff-size budget counts. Tests and docs are free, so thorough tests aren't punished.
+source: ["src/**", "migrations/**"]
+
+# Test files: checked for deleted tests, removed or rewritten assertions, and added skips.
+tests: ["tests/**", "**/*.test.ts"]
+
+# Never changed unless the task allows the path (task.yaml: allow.protected_paths).
+# From Tally's CLAUDE.md rule 4.
+protected:
+  - src/auth.ts
+  - tests/helpers.ts
+  - vitest.config.ts
+  - tsconfig.json
+  - package.json
+  - package-lock.json
+  - .github/
+
+# Append-only: existing files may never change; new ones only if the task allows
+# (task.yaml: allow.new_migrations).
+migrations: migrations/
+
+# Where new dependencies would appear (task.yaml: allow.new_dependencies).
+dependency_files: ["**/package.json", "**/package-lock.json"]
+
+coverage:
+  max_drop_points: 0.5 # line coverage, in percentage points
+
+static_analysis:
+  fail_on: [error] # SARIF levels that block

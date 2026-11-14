@@ -1,0 +1,7 @@
+id: T13
+title: Fixture
+budget:
+  max_src_files: 2
+  max_src_lines: 30
+allow:
+  protected_paths: ["src/auth.ts"]

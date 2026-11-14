@@ -1,0 +1,4 @@
+# Toolchain for Gatekeeper. Run `mise install` once; versions are pinned for everyone.
+[tools]
+go = "1.27"
+node = "24"
