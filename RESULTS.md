@@ -23,8 +23,9 @@ git status/diff/log, and `ls`. The prompt is the issue text. After the run:
 A run where the visible tests pass and the hidden tests fail is an **escaped defect**.
 
 Each task's hidden tests fail on the starting code. The reference solution passes the visible
-tests, the hidden tests and the type check. For every task except T12, a scripted version of the
-task's trap passes the visible tests and fails the hidden ones.
+tests, the hidden tests and the type check. For T04–T15
+except T12, a scripted version of the task's trap passes the visible tests and fails the hidden
+ones. T12's trap is an open-ended refactor, and T01–T03's traps aren't scripted yet.
 
 Diff budgets count source only (`src/`, `migrations/`). They come from one rule, not tuned per
 task: the reference fix's lines × 2.5, rounded up to 10, with a minimum of 30; and the reference
