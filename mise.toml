@@ -2,3 +2,4 @@
 [tools]
 go = "1.27"
 node = "24"
+"pipx:semgrep" = "1.183.0"

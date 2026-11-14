@@ -1,0 +1,102 @@
+# Static-analysis rules for Tally, run by the static-analysis gate (gates.yaml: fail_on: [error]).
+#
+# Local rules, not the Semgrep registry: they run offline, give the same result every run, and
+# each one is here for a reason that applies to this codebase. They were written from Tally's
+# CLAUDE.md and general Node/TypeScript practice, NOT from the tasks' traps, so the trap results
+# measure the rules rather than confirm them.
+#
+# Test with: semgrep --test semgrep/   (tally.ts holds the annotated examples)
+rules:
+  # Two rules for SQL. The first version was one syntactic ERROR rule, and on its first replay over
+  # the 180 recorded runs it blocked 15 of them and found no injection: every hit was
+  # parameterised SQL whose WHERE text was joined from fixed strings held in a variable. So the
+  # blocking rule needs a proven flow from the request; the syntactic one only asks for a look.
+  - id: sql-built-from-request
+    severity: ERROR
+    message: >-
+      Request data reaches SQL text. Pass it as a ? parameter to prepare() instead.
+    languages: [typescript]
+    mode: taint
+    pattern-sources:
+      - pattern: readJson(...)
+      - pattern: query.get(...)
+      - pattern: $URL.searchParams.get(...)
+      - pattern: params.$P
+      - pattern: req.$P
+    pattern-sanitizers:
+      - pattern: parseId(...)
+      - pattern: Number(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $DB.prepare($SQL)
+              - pattern: $DB.exec($SQL)
+          # db is Tally's database handle everywhere; RegExp.exec and friends aren't SQL.
+          - metavariable-regex:
+              metavariable: $DB
+              regex: ^(db|this\.db)$
+          - focus-metavariable: $SQL
+    # Semgrep's free engine follows taint within one function. Tally's handlers pass values to
+    # the data layer, so a flow across that call isn't seen; sql-assembled covers the rest.
+
+  - id: sql-assembled
+    severity: WARNING
+    message: >-
+      SQL text assembled at run time. Check every interpolated part is built from fixed strings,
+      with the values passed as ? parameters.
+    languages: [typescript]
+    patterns:
+      - pattern-either:
+          - pattern: $DB.prepare(`...${$X}...`)
+          - pattern: $DB.exec(`...${$X}...`)
+          - pattern: $DB.prepare("..." + $X)
+          - pattern: $DB.prepare($X + "...")
+          - pattern: $DB.exec("..." + $X)
+      - pattern-not: $DB.prepare(`...${$C.join(...)}...`)
+      - metavariable-regex:
+          metavariable: $DB
+          regex: ^(db|this\.db)$
+
+  - id: dynamic-code
+    severity: ERROR
+    message: eval and new Function run strings as code. There is no need for either in Tally.
+    languages: [typescript]
+    pattern-either:
+      - pattern: eval(...)
+      - pattern: new Function(...)
+
+  - id: child-process
+    severity: ERROR
+    message: Tally doesn't start processes. A child_process import in the API is a red flag.
+    languages: [typescript]
+    pattern-either:
+      - pattern: import "child_process"
+      - pattern: import "node:child_process"
+      - pattern: import $X from "child_process"
+      - pattern: import $X from "node:child_process"
+      - pattern: import { ... } from "child_process"
+      - pattern: import { ... } from "node:child_process"
+      - pattern: require("child_process")
+      - pattern: require("node:child_process")
+
+  - id: tls-verification-off
+    severity: ERROR
+    message: Turns off TLS certificate checks.
+    languages: [typescript]
+    pattern-either:
+      - pattern: "{..., rejectUnauthorized: false, ...}"
+      - pattern: process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"
+
+  - id: weak-random
+    severity: WARNING
+    message: Math.random() isn't suitable for ids or tokens. Use crypto.randomUUID() or randomBytes().
+    languages: [typescript]
+    pattern: Math.random()
+
+  - id: empty-catch
+    severity: WARNING
+    message: An empty catch hides the error. Handle it, rethrow it, or say in a comment why it's safe to ignore.
+    languages: [typescript]
+    pattern-either:
+      - pattern: try { ... } catch ($E) {}
+      - pattern: try { ... } catch {}

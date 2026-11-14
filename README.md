@@ -22,6 +22,7 @@ gate and were still wrong.
 | `runner/` | Scripts that prepare a clean copy, run the agent, and collect the diff, test results, coverage and cost. |
 | `cmd/gatekeeper/`, `internal/` | The gate CLI (Go, standard library plus a YAML parser). |
 | `gates.yaml` | Tally's gate policy: what counts as source and tests, protected paths, migrations, thresholds. |
+| `semgrep/` | Local Semgrep rules for the static-analysis gate, with annotated examples (`semgrep --test semgrep/`). |
 
 The hidden tests are in this public repo, so anyone can read them. The agent can't: each run
 works in a fresh copy of `tally/` that never contains them.
@@ -31,7 +32,8 @@ works in a fresh copy of `tally/` that never contains them.
 ```bash
 cd tally && npm install && cd ..
 runner/validate-tasks.sh          # no API calls: checks every task's hidden tests fail on the
-                                  # base code and pass with the reference fix
+                                  # base code and pass with the reference fix, and that the
+                                  # Semgrep rules pass their tests and are clean on the base app
 runner/run-traps.sh               # no API calls: puts each scripted trap through the pipeline
                                   # and the gates, and checks it fails where its header says
 cp .env.example .env              # add an API key with a spend limit
@@ -51,7 +53,7 @@ summaries, SARIF) and applies the gates. It runs no tools itself, so it's fast a
 a unit-tested pure function.
 
 ```bash
-mise install                                   # Go 1.27 and Node 24, pinned in mise.toml
+mise install                                   # Go 1.27, Node 24 and Semgrep, pinned in mise.toml
 go test ./...
 go build -o bin/gatekeeper ./cmd/gatekeeper
 
@@ -72,7 +74,14 @@ bin/gatekeeper eval runs/<batch>                         # score the gates again
 | `migrations` | the diff | An existing migration changes, or one is added when the task doesn't allow schema changes |
 | `dependencies` | `package.json` / lockfile in the diff | A dependency is added and the task doesn't allow it |
 | `secrets` | added lines | A line looks like a key, token or private key (the report never prints the value) |
-| `static-analysis` | SARIF | A finding at a blocking level in a file the change touched |
+| `static-analysis` | SARIF from Semgrep | An `error`-level finding in a file the change touched. Warnings are reported, not blocking. |
+
+The static-analysis rules are local (`semgrep/tally.yaml`), not the Semgrep registry. They run
+offline and give the same answer every time. Each one has a stated reason that applies to Tally:
+SQL built from request data (a taint rule), `eval`/`new Function`, `child_process`, TLS checks
+turned off, plus warnings for SQL assembled at run time, `Math.random()` and empty `catch`. They were written from `CLAUDE.md` and general
+practice, not from the traps. Runs collected before Semgrep joined the pipeline get their SARIF
+from `runner/backfill-semgrep.sh runs/<batch>`, which rebuilds each run's code from its diff.
 
 A gate whose input wasn't given reports `skip`, not `pass`. `check` exits 0 when every gate
 passes, 1 when one fails, and 2 on a usage or input error.

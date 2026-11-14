@@ -107,8 +107,9 @@ extended `import` line. The summarizer now counts only removed or rewritten
 ## The gates on these runs
 
 `gatekeeper eval runs/<batch>` replays a batch through all ten gates from the saved artifacts,
-with no re-run. It then scores each run against the hidden tests. Static analysis is skipped
-everywhere: there's no Semgrep step yet.
+with no re-run. It then scores each run against the hidden tests. Static analysis comes from
+Semgrep, added afterwards and backfilled onto these runs by rebuilding each one's code from its
+diff (see [Static analysis](#static-analysis)).
 
 | Batch | Accepted | Caught | Escaped the gates | Blocked a correct change |
 |---|---|---|---|---|
@@ -129,6 +130,45 @@ everywhere: there's no Semgrep step yet.
 
   The hidden tests judge behaviour only, so for a policy gate these blocks are the gate doing
   its job.
+
+## Static analysis
+
+Semgrep 1.183 with local rules (`semgrep/tally.yaml`): SQL built from request data, `eval`,
+`child_process`, TLS checks turned off (all blocking), plus warnings for SQL assembled at run
+time, `Math.random()` and empty `catch`.
+
+On the 180 runs and 16 traps, it blocked nothing and found nothing real:
+
+| Batch | Blocking findings | Warnings |
+|---|---|---|
+| v1 | 0 | 19 `sql-assembled`, 2 `empty-catch` |
+| v2 | 0 | 17 `sql-assembled`, 2 `empty-catch` |
+| traps | 0 | – |
+
+- **Every `sql-assembled` warning is parameterised SQL.** The `WHERE` text is joined from fixed
+  strings held in a variable (`${where}`, `${placeholders}`), and the values go in as `?`
+  parameters.
+- **Both `empty-catch` warnings are Sonnet's T08 cursor parsing.** It falls through to
+  `throw badRequest(...)` and has a comment, so it's fine.
+
+Getting there took two wrong versions, both caught only by replaying the recorded runs:
+
+1. **One syntactic blocking rule for SQL.** On replay it blocked 15 runs and found no
+   injection. Every hit was the parameterised pattern above. The fix was to split it:
+   - a taint rule that blocks only when request data reaches SQL text;
+   - the syntactic rule kept as a warning for review.
+2. **The first taint rule matched `RegExp.exec(url.pathname)` as if it were SQL.** That line is
+   Tally's router, and most runs touch its file, so 128 of 180 runs failed the gate. The sinks
+   are now limited to the `db` handle.
+
+`runner/validate-tasks.sh` now fails if the rules' annotated tests fail or the base app has a
+blocking finding. A rule that fires on base code blocks every change that touches that file.
+
+Limits:
+- Semgrep's free engine follows taint only within one function. A flow from a handler in
+  `app.ts` into SQL built in the data layer isn't seen; `sql-assembled` flags it for review.
+- No agent wrote anything these rules exist for, so the blocking rules are tested only by their
+  annotated examples.
 
 ## Scripted traps
 
@@ -199,4 +239,5 @@ So the gate CLI's job is less "catch the bug the tests missed" and more:
 - One model family.
 - Escape counts at this size are anecdotes, not rates.
 - The traps were written by the same person as the tasks, and their tests are an approximation.
-- No static analysis yet.
+- The static-analysis rules were tuned after replaying the recorded runs. That tuning removed
+  false blocks; it didn't make any rule catch a run it would otherwise have missed.

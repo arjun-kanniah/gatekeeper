@@ -9,6 +9,20 @@
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 
+# The static-analysis rules: their annotated tests pass, and the base app has no blocking finding.
+# (A rule that fires on base code blocks every change that touches that file.)
+semgrep_bin="$( (cd "$ROOT" && mise which semgrep 2>/dev/null) || command -v semgrep || true)"
+if [[ -n "$semgrep_bin" ]]; then
+  sg() { PATH="$(dirname "$semgrep_bin"):$PATH" SEMGREP_ENABLE_VERSION_CHECK=0 "$semgrep_bin" "$@"; }
+  sg --test --metrics=off "$ROOT/semgrep" > /dev/null 2>&1 || { echo "PROBLEM semgrep rule tests fail: semgrep --test semgrep/"; exit 1; }
+  blocking=$(cd "$TALLY" && sg scan --config "$ROOT/semgrep/tally.yaml" --metrics=off --quiet --severity ERROR --json . \
+    | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).results.length))')
+  [[ "$blocking" == 0 ]] || { echo "PROBLEM semgrep: $blocking blocking findings on the base app"; exit 1; }
+  echo "semgrep  OK       rule tests pass; base app has no blocking findings"
+else
+  echo "semgrep  SKIPPED  not installed (mise install)"
+fi
+
 tasks=("$@")
 if [[ ${#tasks[@]} -eq 0 ]]; then
   for d in "$ROOT"/tasks/T*/; do tasks+=("$(basename "$d" | cut -d- -f1)"); done

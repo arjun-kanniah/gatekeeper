@@ -14,10 +14,12 @@ task_dir() {
 # prepare_workdir <task_dir> <workdir>
 # Copies Tally (with node_modules, without hidden tests), applies the task overlay and commits
 # the result as the "base" commit, so the agent's change is exactly `git diff base`.
+# NO_DEPS=1 leaves node_modules out, for a copy that is only scanned, never run.
 prepare_workdir() {
-  local tdir="$1" work="$2"
+  local tdir="$1" work="$2" excludes=(--exclude=./coverage --exclude=./tally.db)
+  [[ "${NO_DEPS:-0}" == 1 ]] && excludes+=(--exclude=./node_modules)
   mkdir -p "$work"
-  (cd "$TALLY" && tar --exclude=./coverage --exclude=./tally.db -cf - .) | (cd "$work" && tar -xf -)
+  (cd "$TALLY" && tar "${excludes[@]}" -cf - .) | (cd "$work" && tar -xf -)
   if [[ -d "$tdir/overlay" ]]; then
     cp -a "$tdir/overlay/." "$work/"
   fi
@@ -87,6 +89,25 @@ check_change() {
   typecheck_exit=$?
   set -e
   cp "$work/coverage/coverage-summary.json" "$out/head-coverage.json" 2>/dev/null || true
+  run_static_analysis "$work" "$out"
+}
+
+# run_static_analysis <workdir> <out>: Semgrep with the local rules in semgrep/, as SARIF. Without
+# Semgrep (`mise install` adds it) there's no semgrep.sarif and the static-analysis gate skips.
+run_static_analysis() {
+  local work="$1" out="$2" bin
+  # The real binary, not mise's shim: the shim only resolves inside the project directory.
+  bin="$( (cd "$ROOT" && mise which semgrep 2>/dev/null) || command -v semgrep)" || {
+    echo "semgrep not installed: the static-analysis gate will skip" >&2; return 0; }
+  rm -f "$out/semgrep.sarif"
+  # Semgrep scans the files git tracks; collect_change has already staged the change.
+  # Its own bin dir first: the semgrep wrapper finds its helpers on PATH.
+  if ! (cd "$work" && PATH="$(dirname "$bin"):$PATH" SEMGREP_ENABLE_VERSION_CHECK=0 "$bin" scan --config "$ROOT/semgrep/tally.yaml" \
+        --metrics=off --disable-version-check --quiet --sarif -o "$out/semgrep.sarif" .) \
+        > "$out/semgrep.log" 2>&1; then
+    rm -f "$out/semgrep.sarif"   # a failed scan must read as "no result", not "no findings"
+    echo "semgrep failed: see $out/semgrep.log" >&2
+  fi
 }
 
 # run_hidden <task_dir> <workdir> <out>: the truth. Sets hidden_exit.
