@@ -1,6 +1,7 @@
 # Runs the agent on tasks and scores the gates. This is the only workflow that spends money: it
 # needs the ANTHROPIC_API_KEY secret (the dedicated Gatekeeper key, which has its own spend limit
 # in the Anthropic console) and runs only when started by hand.
+# Started with: gh workflow run agent-batch.yml -f tasks=T01 -f setups=A -f runs=1 -f cap_usd=0.10
 name: agent-batch
 
 on:
